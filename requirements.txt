@@ -1,0 +1,8 @@
+langchain-anthropic
+langchain-openai
+langchain-core
+langgraph
+python-dotenv
+requests
+pydantic
+certifi

@@ -1,0 +1,33 @@
+[project]
+name = "flexi-deep-research-langgraph"
+version = "0.1.0"
+description = "A flexible, agentic deep research system using LangGraph."
+requires-python = ">=3.11"
+dependencies = [
+    "langchain-core",
+    "langchain-anthropic",
+    "langchain-openai",
+    "langgraph",
+    "python-dotenv",
+    "pydantic",
+    "pydantic-settings",
+    "pyyaml",
+    "requests",
+    "certifi",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "black",
+    "ruff",
+    "mypy"
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"

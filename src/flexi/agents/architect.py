@@ -47,6 +47,7 @@ class ArchitectConfig:
     reasoning: str
     agents: Dict[str, AgentConfig] = field(default_factory=dict)
     supervisor_mandatory: bool = True
+    suggested_workflow: List[str] = field(default_factory=list) # Enhanced: Strategic plan
     stats: Optional[Dict[str, Any]] = None # New stats field
     
     def to_dict(self) -> Dict[str, Any]:
@@ -55,6 +56,7 @@ class ArchitectConfig:
             "reasoning": self.reasoning,
             "agents": {role: config.to_dict() for role, config in self.agents.items()},
             "supervisor_mandatory": self.supervisor_mandatory,
+            "suggested_workflow": self.suggested_workflow,
             "stats": self.stats
         }
     
@@ -145,7 +147,8 @@ class ArchitectAgent:
         architect_config = ArchitectConfig(
             research_question=original_question,
             reasoning=config_dict.get("reasoning", ""),
-            supervisor_mandatory=supervisor_mandatory
+            supervisor_mandatory=supervisor_mandatory,
+            suggested_workflow=config_dict.get("suggested_workflow", [])
         )
         
         agents_dict = config_dict.get("agents", {})
@@ -158,6 +161,23 @@ class ArchitectAgent:
                 template_used=agent_dict.get("template_used"),
                 customization=agent_dict.get("customization")
             )
+        
+        # Inject Strategic Plan into Supervisor Prompt
+        if architect_config.suggested_workflow and "supervisor" in architect_config.agents:
+            supervisor_agent = architect_config.agents["supervisor"]
+            
+            # Format the workflow as a string
+            workflow_text = "\n".join(architect_config.suggested_workflow)
+            
+            # Check if placeholder exists
+            if "{suggested_workflow}" in supervisor_agent.system_prompt:
+                supervisor_agent.system_prompt = supervisor_agent.system_prompt.replace(
+                    "{suggested_workflow}", workflow_text
+                )
+            else:
+                # Append if not present (and not already there in some other form)
+                if "## STRATEGIC PLAN" not in supervisor_agent.system_prompt:
+                    supervisor_agent.system_prompt += f"\n\n## STRATEGIC PLAN\nThe Architect has designed the following workflow for this specific team:\n{workflow_text}\n\nUse this as your primary guide."
         
         if architect_config.supervisor_mandatory and "supervisor" not in architect_config.agents:
             raise ValueError("Supervisor agent is mandatory but not present in config")

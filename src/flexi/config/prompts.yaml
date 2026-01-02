@@ -100,6 +100,10 @@ architect:
           "description": "What this agent does"
         }}
       }},
+      "suggested_workflow": [
+        "Step 1: Have [agent] do X",
+        "Step 2: Have [agent] do Y"
+      ],
       "reasoning": "Why you chose this architecture",
       "supervisor_mandatory": true
     }}
@@ -143,6 +147,13 @@ role_templates:
 
       Available agents you can delegate to:
       {available_agents}
+
+      ## STRATEGIC PLAN
+      The Architect has designed the following workflow for this specific team:
+      {suggested_workflow}
+
+      Use this as your primary guide, but deviate if findings require it. Be clear on who you are delegating to.
+      (Remember your subordinates: {available_agents})
 
       Decision criteria:
       - Prioritize understanding scope first (clarify if needed)

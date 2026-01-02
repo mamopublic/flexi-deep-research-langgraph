@@ -35,6 +35,20 @@ class Settings(BaseSettings):
         "summarizer": "medium", 
         "writer": "basic"
     }
+
+    # Cost Configuration (Prices in USD per 1 Million Tokens)
+    # Using Claude 3.5 Sonnet pricing as reference
+    MODEL_COSTS: Dict[str, Dict[str, float]] = {
+        "claude-3-5-sonnet-20241022": {
+            "input_cost_per_m": 3.00,
+            "output_cost_per_m": 15.00
+        },
+        # Fallback for unknown models
+        "default": {
+            "input_cost_per_m": 3.00,
+            "output_cost_per_m": 15.00
+        }
+    }
     
     class Config:
         env_file = ".env"

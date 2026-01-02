@@ -11,6 +11,13 @@ def merge_findings(left: Dict[str, str], right: Dict[str, str]) -> Dict[str, str
     return new_findings
 
 
+def merge_stats(left: List[Dict[str, Any]], right: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Reducer for usage stats."""
+    if left is None: left = []
+    if right is None: right = []
+    return left + right
+
+
 class ResearchState(TypedDict):
     """
     State maintained throughout the research workflow.
@@ -21,6 +28,7 @@ class ResearchState(TypedDict):
     current_agent: str
     supervisor_decision: Optional[str]
     findings: Annotated[Dict[str, str], merge_findings]
+    stats: Annotated[List[Dict[str, Any]], merge_stats]
     final_report: Optional[str]
 
 

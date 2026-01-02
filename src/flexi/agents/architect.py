@@ -27,6 +27,19 @@ class AgentConfig:
             "customization": self.customization
         }
 
+import time
+
+def _calculate_cost(model_name: str, input_tokens: int, output_tokens: int) -> float:
+    """Calculate cost based on model pricing (duplicate of graph_builder logic for independence)."""
+    if model_name in settings.MODEL_COSTS:
+        pricing = settings.MODEL_COSTS[model_name]
+    else:
+        pricing = settings.MODEL_COSTS["default"]
+    
+    input_cost = (input_tokens / 1_000_000) * pricing["input_cost_per_m"]
+    output_cost = (output_tokens / 1_000_000) * pricing["output_cost_per_m"]
+    return round(input_cost + output_cost, 6)
+
 @dataclass
 class ArchitectConfig:
     """Configuration for the entire agent system, emitted by the architect."""
@@ -34,13 +47,15 @@ class ArchitectConfig:
     reasoning: str
     agents: Dict[str, AgentConfig] = field(default_factory=dict)
     supervisor_mandatory: bool = True
+    stats: Optional[Dict[str, Any]] = None # New stats field
     
     def to_dict(self) -> Dict[str, Any]:
         return {
             "research_question": self.research_question,
             "reasoning": self.reasoning,
             "agents": {role: config.to_dict() for role, config in self.agents.items()},
-            "supervisor_mandatory": self.supervisor_mandatory
+            "supervisor_mandatory": self.supervisor_mandatory,
+            "stats": self.stats
         }
     
     def to_json(self) -> str:
@@ -77,7 +92,27 @@ class ArchitectAgent:
     def design_system(self, research_question: str) -> ArchitectConfig:
         """Design a multi-agent system for the given research question."""
         prompt = self._build_architect_prompt(research_question)
+        
+        start_time = time.time()
         response = self.llm.invoke(prompt)
+        end_time = time.time()
+        duration = end_time - start_time
+        
+        # Extract usage
+        usage = response.response_metadata.get("token_usage", {})
+        input_tokens = usage.get("prompt_tokens", 0)
+        output_tokens = usage.get("completion_tokens", 0)
+        cost = _calculate_cost(self.model, input_tokens, output_tokens)
+        
+        stats_record = {
+            "agent": "architect",
+            "model": self.model,
+            "duration": round(duration, 2),
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cost": cost
+        }
+
         response_text = response.content.strip()
         
         try:
@@ -94,7 +129,9 @@ class ArchitectAgent:
             print(f"Failed to parse architect response: {e}")
             raise
         
-        return self._parse_config_dict(config_dict, research_question)
+        config = self._parse_config_dict(config_dict, research_question)
+        config.stats = stats_record
+        return config
     
     def _parse_config_dict(self, config_dict: Dict[str, Any], original_question: str) -> ArchitectConfig:
         # Check complexity to infer defaults if needed, though we trust the specific field

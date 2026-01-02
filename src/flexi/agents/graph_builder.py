@@ -1,12 +1,25 @@
 from typing import Dict, Any, List, Optional
 from langgraph.graph import StateGraph, START, END
 from langchain_core.messages import HumanMessage, AIMessage
+import time
 
 from flexi.core.state import ResearchState
 from flexi.core.llm_provider import get_llm
 from flexi.core.tools import tools_registry
 from flexi.agents.architect import ArchitectConfig, AgentConfig
+from flexi.config.settings import settings
 import re
+
+def _calculate_cost(model_name: str, input_tokens: int, output_tokens: int) -> float:
+    """Calculate cost based on model pricing."""
+    if model_name in settings.MODEL_COSTS:
+        pricing = settings.MODEL_COSTS[model_name]
+    else:
+        pricing = settings.MODEL_COSTS["default"]
+        
+    input_cost = (input_tokens / 1_000_000) * pricing["input_cost_per_m"]
+    output_cost = (output_tokens / 1_000_000) * pricing["output_cost_per_m"]
+    return round(input_cost + output_cost, 6)
 
 def create_agent_executor(agent_config: AgentConfig, model_name: str) -> callable:
     """Create an executor function for a single agent."""
@@ -36,11 +49,31 @@ When you are finished, your findings will be sent back to the supervisor.
         messages = list(state['messages'])
         messages.append(HumanMessage(content=f"Continue as {agent_config.role}:\n{full_system_prompt}"))
         
+        start_time = time.time()
         response = llm.invoke(messages)
+        end_time = time.time()
+        duration = end_time - start_time
+        
+        # Extract usage
+        usage = response.response_metadata.get("token_usage", {})
+        input_tokens = usage.get("prompt_tokens", 0)
+        output_tokens = usage.get("completion_tokens", 0)
+        cost = _calculate_cost(model_name, input_tokens, output_tokens)
+        
+        stats_record = {
+            "agent": agent_config.role,
+            "model": model_name,
+            "duration": round(duration, 2),
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cost": cost
+        }
+        
         return {
             "messages": [AIMessage(content=response.content)],
             "findings": {agent_config.role: response.content},
-            "current_agent": agent_config.role
+            "current_agent": agent_config.role,
+            "stats": [stats_record]
         }
     return agent_executor
 
@@ -64,7 +97,26 @@ Otherwise, start your response with 'NEXT: [agent_name]' followed by your reason
         messages = list(state['messages'])
         messages.append(HumanMessage(content=system_prompt))
         
+        start_time = time.time()
         response = llm.invoke(messages)
+        end_time = time.time()
+        duration = end_time - start_time
+        
+        # Extract usage
+        usage = response.response_metadata.get("token_usage", {})
+        input_tokens = usage.get("prompt_tokens", 0)
+        output_tokens = usage.get("completion_tokens", 0)
+        cost = _calculate_cost(model_name, input_tokens, output_tokens)
+        
+        stats_record = {
+            "agent": "supervisor",
+            "model": model_name,
+            "duration": round(duration, 2),
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cost": cost
+        }
+
         content = response.content
         
         next_agent = None
@@ -81,7 +133,8 @@ Otherwise, start your response with 'NEXT: [agent_name]' followed by your reason
         return {
             "messages": [AIMessage(content=content)],
             "supervisor_decision": next_agent,
-            "current_agent": "supervisor"
+            "current_agent": "supervisor",
+            "stats": [stats_record]
         }
     return supervisor_executor
 
@@ -90,7 +143,7 @@ def _format_findings(findings: Dict[str, str]) -> str:
         return "(No previous findings yet)"
     formatted = ""
     for role, content in findings.items():
-        formatted += f"\n[{role}]:\n{str(content)[:500]}...\n"
+        formatted += f"\n[{role}]:\n{str(content)}\n"
     return formatted
 
 class DynamicResearchSystemBuilder:
@@ -180,6 +233,23 @@ class DynamicResearchSystemBuilder:
             "current_agent": "START",
             "findings": {},
             "final_report": "",
-            "supervisor_decision": None
+            "supervisor_decision": None,
+            "stats": []
         }
         return self.graph.invoke(initial_state)
+
+    def stream(self, research_question: str):
+        """Stream the execution of the graph, yielding state updates."""
+        if not self.graph:
+            self.build()
+            
+        initial_state = {
+            "research_question": research_question,
+            "messages": [HumanMessage(content=research_question)],
+            "current_agent": "START",
+            "findings": {},
+            "final_report": "",
+            "supervisor_decision": None,
+            "stats": []
+        }
+        return self.graph.stream(initial_state)

@@ -20,24 +20,70 @@ def test_end_to_end_simple():
     logger.info(f"Architecture designed. Complexity: {config.agents.keys()}")
     
     # 2. Build and Run System
-    logger.info("Step 2: Building and running research graph...")
+    # 2. Build and Run System
+    logger.info("Step 2: Building and running research graph (stream mode)...")
     builder = DynamicResearchSystemBuilder(config)
-    result_state = builder.run(query)
+    
+    final_state = None
+    execution_sequence = []
+    
+    # Initialize stats with Architect's cost
+    all_stats = []
+    total_cost = 0.0
+    
+    if config.stats:
+        all_stats.append(config.stats)
+        archi_cost = config.stats.get("cost", 0.0)
+        total_cost += archi_cost
+        print(f"  -> ARCHITECT STATS: Cost=${archi_cost:.4f}, Duration={config.stats.get('duration', 0.0):.2f}s")
+
+    print("\n" + "="*50)
+    print("LIVE EXECUTION LOGS")
+    print("="*50)
+    
+    for event in builder.stream(query):
+        for node_name, updates in event.items():
+            execution_sequence.append(node_name)
+            print(f"\n[ACTOR]: {node_name.upper()}")
+            
+            if "stats" in updates:
+                new_stats = updates["stats"]
+                for stat in new_stats:
+                    cost = stat.get("cost", 0.0)
+                    duration = stat.get("duration", 0.0)
+                    total_cost += cost
+                    all_stats.append(stat)
+                    print(f"  -> STATS: Cost=${cost:.4f}, Duration={duration:.2f}s")
+
+            if "findings" in updates:
+                current_findings = updates.get("findings", {})
+                for role, content in current_findings.items():
+                    if role == node_name:
+                        preview = str(content)[:200].replace('\n', ' ')
+                        print(f"  -> FINDING: {preview}...")
+            
+            if "messages" in updates:
+                last_msg = updates["messages"][-1]
+                content_preview = str(last_msg.content)[:100].replace('\n', ' ')
+                print(f"  -> MESSAGE: {content_preview}...")
+
+            final_state = updates
+
+    print("="*50 + "\n")
     
     # 3. Extract Results
-    final_answer = result_state.get("final_report")
-    if not final_answer:
-        # Fallback to last message if no explicit final report
-        messages = result_state.get("messages", [])
-        if messages:
-            final_answer = messages[-1].content
-        else:
-            final_answer = "No response generated."
-
+    final_answer = "No output."
+    if final_state:
+        if "messages" in final_state:
+            final_answer = final_state["messages"][-1].content
+    
     # 4. Construct Output JSON
     output_data = {
         "query": query,
         "architecture": config.to_dict(),
+        "execution_sequence": execution_sequence,
+        "total_cost": round(total_cost, 6),
+        "execution_stats": all_stats,
         "answer": final_answer
     }
     
@@ -48,9 +94,10 @@ def test_end_to_end_simple():
     json_str = json.dumps(output_data, indent=2)
     print(json_str)
     print("="*50 + "\n")
-
+    
     # Save to file
     output_filename = "simple_test_output.json"
+    print(f"TOTAL BILL (Architect + Agents): ${total_cost:.4f}")
     with open(output_filename, "w") as f:
         f.write(json_str)
     logger.info(f"Output saved to {output_filename}")

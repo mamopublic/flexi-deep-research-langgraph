@@ -116,6 +116,40 @@ tools_registry = ToolsRegistry()
 
 
 # ============================================================================
+# MCP TOOL INTEGRATION
+# ============================================================================
+
+# Initialize MCP tools if configured
+try:
+    from flexi.core.mcp_manager import MCPToolManager
+    import logging
+    
+    logger = logging.getLogger(__name__)
+    mcp_manager = MCPToolManager()
+    
+    # Register MCP servers from settings
+    for server_name, config in settings.MCP_SERVERS.items():
+        if config.get("enabled", False):
+            logger.info(f"Registering MCP server: {server_name}")
+            success = mcp_manager.register_server(
+                server_name, 
+                config["command"], 
+                config.get("args", [])
+            )
+            if success:
+                logger.info(f"MCP server '{server_name}' registered successfully")
+    
+    # Discover and register all tools from MCP servers
+    num_tools = mcp_manager.discover_and_register_tools(tools_registry)
+    logger.info(f"Registered {num_tools} MCP tools")
+    
+except Exception as e:
+    import logging
+    logging.getLogger(__name__).warning(f"MCP integration failed (non-fatal): {e}")
+    # Continue without MCP tools - this is non-fatal
+
+
+# ============================================================================
 # SEARCH TOOLS
 # ============================================================================
 

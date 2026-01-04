@@ -44,6 +44,15 @@ class Settings(BaseSettings):
     # Chroma Knowledge Base Config
     CHROMA_DB_DIR: str = ".chroma_db"
     CHROMA_COLLECTION_NAME: str = "flexi_knowledge_base"
+    
+    # MCP Server Configuration
+    MCP_SERVERS: Dict[str, Dict[str, Any]] = {
+        "weather": {
+            "command": "mcp-server-weather",
+            "args": ["--stdio"],
+            "enabled": True
+        }
+    }
 
     # Cost Configuration (Prices in USD per 1 Million Tokens)
     # Using Claude 3.5 Sonnet pricing as reference

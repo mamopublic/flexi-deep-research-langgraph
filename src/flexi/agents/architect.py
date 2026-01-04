@@ -16,6 +16,7 @@ class AgentConfig:
     description: str = ""
     template_used: Optional[str] = None
     customization: Optional[Dict[str, Any]] = None
+    context_dependencies: List[str] = field(default_factory=list) # Agents whose output this agent needs
     
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -24,7 +25,8 @@ class AgentConfig:
             "tools": self.tools,
             "description": self.description,
             "template_used": self.template_used,
-            "customization": self.customization
+            "customization": self.customization,
+            "context_dependencies": self.context_dependencies
         }
 
 import time
@@ -139,11 +141,6 @@ class ArchitectAgent:
         # Check complexity to infer defaults if needed, though we trust the specific field
         supervisor_mandatory = config_dict.get("supervisor_mandatory", True)
         
-        # For simple complexity, we might default supervisor_mandatory to False if not explicitly set?
-        # But let's rely on what's in the dict or default to True.
-        # Actually, if the LLM follows the 'simple' design (1 agent), it might omit supervisor_mandatory or set it to false.
-        # Let's trust the boolean if present.
-        
         architect_config = ArchitectConfig(
             research_question=original_question,
             reasoning=config_dict.get("reasoning", ""),
@@ -151,15 +148,32 @@ class ArchitectAgent:
             suggested_workflow=config_dict.get("suggested_workflow", [])
         )
         
+        # Defined default dependencies (Hybrid Model)
+        default_dependencies = {
+            "clarifier": [], # Only needs question
+            "researcher": ["clarifier"], # Needs clarification
+            "analyst": ["researcher"], # Needs research data
+            "summarizer": ["researcher", "analyst"], # Needs findings and analysis
+            "writer": ["summarizer"] # Needs synthesis
+        }
+        
         agents_dict = config_dict.get("agents", {})
         for role_str, agent_dict in agents_dict.items():
+            # Determine dependencies
+            # If standard role, enforce default. If custom, check config or default to nothing.
+            if role_str in default_dependencies:
+                dependencies = default_dependencies[role_str]
+            else:
+                dependencies = agent_dict.get("context_dependencies", [])
+
             architect_config.agents[role_str] = AgentConfig(
                 role=role_str,
                 system_prompt=agent_dict.get("system_prompt", ""),
                 tools=agent_dict.get("tools", []),
                 description=agent_dict.get("description", ""),
                 template_used=agent_dict.get("template_used"),
-                customization=agent_dict.get("customization")
+                customization=agent_dict.get("customization"),
+                context_dependencies=dependencies
             )
         
         # Inject Strategic Plan into Supervisor Prompt

@@ -36,6 +36,15 @@ class Settings(BaseSettings):
         "writer": "basic"
     }
 
+    # Context Management
+    # If If True, subordinate agents receive curated context (saving tokens).
+    # If False, they receive full conversation history.
+    MANAGE_CONVERSATION: bool = True
+
+    # Chroma Knowledge Base Config
+    CHROMA_DB_DIR: str = ".chroma_db"
+    CHROMA_COLLECTION_NAME: str = "flexi_knowledge_base"
+
     # Cost Configuration (Prices in USD per 1 Million Tokens)
     # Using Claude 3.5 Sonnet pricing as reference
     MODEL_COSTS: Dict[str, Dict[str, float]] = {

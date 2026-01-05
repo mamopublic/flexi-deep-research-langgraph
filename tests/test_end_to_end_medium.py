@@ -61,7 +61,8 @@ def test_end_to_end_medium():
                     total_cost += cost
                     all_stats.append(stat)
                     
-                    print(f"  -> STATS: Cost=${cost:.4f}, Duration={duration:.2f}s, Model={model}")
+                    iter_info = f", Progress: {stat.get('iteration_count', 0)}/?"
+                    print(f"  -> STATS: Cost=${cost:.4f}, Duration={duration:.2f}s, Model={model}{iter_info}")
             
             # Print decision if from supervisor
             if "supervisor_decision" in updates:

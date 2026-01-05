@@ -51,7 +51,8 @@ def test_deep_research_kb_flow():
                 for stat in updates["stats"]:
                     cost = stat.get("cost", 0.0)
                     total_cost += cost
-                    print(f"  -> STATS: Cost=${cost:.4f}, Model={stat.get('model')}")
+                    iter_info = f", Progress: {stat.get('iteration_count', 0)}/?"
+                    print(f"  -> STATS: Cost=${cost:.4f}, Model={stat.get('model')}{iter_info}")
             
             # Accumulate Findings
             if "findings" in updates:
@@ -71,6 +72,7 @@ def test_deep_research_kb_flow():
     # 3. Extract and Save Report
     final_answer = "No output found."
     # Priority order for finding the "final" report
+    # Now that we've collapsed names to roles, these keys are stable
     for role in ["writer", "summarizer", "researcher"]:
         if role in all_findings:
             final_answer = all_findings[role]

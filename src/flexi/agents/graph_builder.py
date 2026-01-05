@@ -100,7 +100,15 @@ def create_agent_executor(agent_config: AgentConfig, model_name: str) -> callabl
     - Other agents' conversations
     - Supervisor's internal deliberations
     """
-    llm = get_llm(model_name=model_name, temperature=0.5)
+    from flexi.config.settings import settings
+    
+    # Get temperature for this role (role-based tuning)
+    temperature = settings.ROLE_TEMPERATURE_MAPPING.get(
+        agent_config.role, 
+        settings.DEFAULT_TEMPERATURE
+    )
+    
+    llm = get_llm(model_name=model_name, temperature=temperature)
     
     tool_descriptions = "\n".join([
         f"- {name}: {tools_registry.metadata[name].description}"
@@ -160,38 +168,97 @@ RESEARCH QUESTION: {state['research_question']}
 CONTEXT FROM PRIOR AGENTS:
 {_format_findings(relevant_findings)}
 
-IMPORTANT: If you have prior work on this task, refine and complete it.
-Otherwise, provide substantive output for your role as '{agent_config.role}'."""
+IMPORTANT RULES:
+1. Use tools to gather actual evidence. Do not just talk about it.
+2. When you have enough information, provide a substantive FINAL answer.
+3. If you have prior work on this task, refine and complete it."""
         
         messages.append(HumanMessage(content=system_prompt))
         
-        # ✅ STEP 6: Execute with minimal context
-        start_time = time.time()
-        response = llm.invoke(messages)
-        duration = round(time.time() - start_time, 2)
+        # ✅ STEP 6: Execute with TOOL-CALLING LOOP
+        from langchain_core.messages import ToolMessage
         
-        # Extract token usage
-        usage = response.response_metadata.get("token_usage", {})
-        input_tokens = usage.get("prompt_tokens", 0)
-        output_tokens = usage.get("completion_tokens", 0)
-        cost = _calculate_cost(model_name, input_tokens, output_tokens)
+        # Bind tools to the LLM
+        available_tools = [
+            tools_registry.tools[name] 
+            for name in agent_config.tools 
+            if name in tools_registry.tools
+        ]
+        
+        run_llm = llm
+        if available_tools:
+            run_llm = llm.bind_tools(available_tools)
+            
+        total_input_tokens = 0
+        total_output_tokens = 0
+        total_duration = 0.0
+        max_iterations = 5
+        iteration = 0
+        
+        final_response = None
+        
+        while iteration < max_iterations:
+            iteration += 1
+            start_time = time.time()
+            response = run_llm.invoke(messages)
+            total_duration += time.time() - start_time
+            
+            # Track usage
+            usage = response.response_metadata.get("token_usage", {})
+            total_input_tokens += usage.get("prompt_tokens", 0)
+            total_output_tokens += usage.get("completion_tokens", 0)
+            
+            messages.append(response)
+            
+            # Check for tool calls
+            if not response.tool_calls:
+                final_response = response
+                break
+                
+            # Execute tools
+            for tool_call in response.tool_calls:
+                tool_name = tool_call["name"]
+                tool_args = tool_call["args"]
+                
+                try:
+                    print(f"  [TOOL]: {tool_name}({tool_args})")
+                    result = tools_registry.call_tool(tool_name, **tool_args)
+                    messages.append(ToolMessage(
+                        tool_call_id=tool_call["id"],
+                        content=str(result)
+                    ))
+                except Exception as e:
+                    # 🔴 VISIBLE WARNING for developer
+                    print(f"  \033[91m[TOOL ERROR]: {tool_name} failed with: {str(e)}\033[0m")
+                    
+                    messages.append(ToolMessage(
+                        tool_call_id=tool_call["id"],
+                        content=f"Error executing tool: {str(e)}"
+                    ))
+        
+        if not final_response:
+            final_response = response # Fallback to last response
+            
+        cost = _calculate_cost(model_name, total_input_tokens, total_output_tokens)
         
         stats_record = {
             "agent": agent_config.role,
             "model": model_name,
-            "duration": duration,
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "cost": cost
+            "duration": round(total_duration, 2),
+            "input_tokens": total_input_tokens,
+            "output_tokens": total_output_tokens,
+            "cost": cost,
+            "iterations": iteration,
+            "iteration_count": state.get("iteration_count", 0)
         }
         
-        # ✅ STEP 6: Return minimal state update
-        # Only THIS agent's response is added to messages (not full history)
+        # ✅ STEP 7: Return state update
         return {
-            "messages": [AIMessage(content=response.content)],
-            "findings": {agent_config.role: response.content},
+            "messages": [AIMessage(content=final_response.content)],
+            "findings": {agent_config.role: final_response.content},
             "current_agent": agent_config.role,
-            "stats": [stats_record]
+            "stats": [stats_record],
+            "iteration_count": state.get("iteration_count", 0) + 1
         }
     
     return agent_executor
@@ -223,15 +290,24 @@ def create_supervisor_executor(
     def supervisor_executor(state: ResearchState) -> Dict[str, Any]:
         """Make routing decision with minimal context overhead."""
         
-        # ✅ Supervisor gets all findings (it's orchestrating)
-        # But NOT the full message history
         findings_summary = _format_findings(state.get('findings', {}))
         
+        # Iteration Tracking
+        iteration_count = state.get('iteration_count', 0)
+        max_iterations = state.get('max_iterations', 15)
+        remaining = max_iterations - iteration_count
+        
+        iteration_notice = ""
+        if remaining <= 2:
+            iteration_notice = f"\n⚠️ WARNING: Budget nearly exhausted ({remaining} steps left). YOU MUST FINISH AND ASSIGN TO A WRITER/SUMMARIZER NOW."
+
         system_prompt = f"""{agent_config.system_prompt}
 
 RESEARCH QUESTION: {state['research_question']}
 
 AVAILABLE AGENTS: {', '.join(subordinate_roles)}
+
+CURRENT PROGRESS: Iteration {iteration_count} of {max_iterations}{iteration_notice}
 
 CURRENT FINDINGS:
 {findings_summary}
@@ -264,7 +340,8 @@ DECISION:
             "duration": duration,
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
-            "cost": cost
+            "cost": cost,
+            "iteration_count": state.get("iteration_count", 0)
         }
         
         # Parse supervisor decision
@@ -328,18 +405,18 @@ class DynamicResearchSystemBuilder:
         """Resolve the appropriate LLM model for a given role.
         
         Uses tiered model assignment from settings:
-        - advanced: Complex analysis (Claude 4)
-        - medium: Standard research (Claude 3.5 Sonnet)
-        - basic: Simple tasks (Claude 3 Opus)
+        - strategic: Tier 1 (Strategic) - Critical decision-making
+        - analytical: Tier 2 (Analytical) - Analysis and processing
+        - synthesis: Tier 3 (Synthesis) - Formatting and presentation
         """
-        tier_name = settings.ROLE_MODEL_MAPPING.get(role, "medium")
+        tier_name = settings.ROLE_MODEL_MAPPING.get(role, "analytical")
         
-        if tier_name == "advanced":
-            return settings.LLM_MODEL_ADVANCED
-        elif tier_name == "basic":
-            return settings.LLM_MODEL_BASIC
+        if tier_name == "strategic":
+            return settings.LLM_MODEL_STRATEGIC
+        elif tier_name == "synthesis":
+            return settings.LLM_MODEL_SYNTHESIS
         else:
-            return settings.LLM_MODEL_MEDIUM
+            return settings.LLM_MODEL_ANALYTICAL
     
     def build(self) -> callable:
         """Build the LangGraph workflow.
@@ -352,18 +429,21 @@ class DynamicResearchSystemBuilder:
         has_supervisor = supervisor_role in self.config.agents
         
         # Create executors for all agents
-        for role, agent_config in self.config.agents.items():
-            model_for_agent = self._resolve_model_for_role(role)
+        for name, agent_config in self.config.agents.items():
+            model_for_agent = self._resolve_model_for_role(agent_config.role)
             
-            if role == supervisor_role:
+            if name == supervisor_role:
                 subordinate_roles = [r for r in self.config.agents.keys() if r != supervisor_role]
-                self.agents[role] = create_supervisor_executor(
+                self.agents[name] = create_supervisor_executor(
                     agent_config, 
                     subordinate_roles, 
                     model_for_agent
                 )
             else:
-                self.agents[role] = create_agent_executor(agent_config, model_for_agent)
+                self.agents[name] = create_agent_executor(
+                    agent_config, 
+                    model_for_agent
+                )
         
         # Build LangGraph
         builder = StateGraph(ResearchState)
@@ -402,6 +482,20 @@ class DynamicResearchSystemBuilder:
             builder.add_edge(sole_agent_role, END)
         
         self.graph = builder.compile()
+        
+        # Set recursion limit based on complexity
+        # LangGraph limits (transitions). Each user 'iteration' is ~2 transitions.
+        # Simple (5 iters) -> 12-15 transitions
+        # Moderate (15 iters) -> 35-40 transitions
+        # Complex (25 iters) -> 60-70 transitions
+        complexity_limits = {
+            "simple": 15,
+            "moderate": 40,
+            "complex": 70
+        }
+        limit = complexity_limits.get(self.config.complexity, 40)
+        self.recursion_limit = limit
+        
         return self.graph
     
     def run(self, research_question: str) -> ResearchState:
@@ -416,6 +510,14 @@ class DynamicResearchSystemBuilder:
         if not self.graph:
             self.build()
         
+        # Set max iterations based on complexity
+        complexity_map = {
+            "simple": 5,
+            "moderate": 15,
+            "complex": 25
+        }
+        max_iters = complexity_map.get(self.config.complexity, 15)
+
         initial_state = {
             "research_question": research_question,
             "messages": [HumanMessage(content=research_question)],
@@ -423,10 +525,12 @@ class DynamicResearchSystemBuilder:
             "findings": {},
             "final_report": "",
             "supervisor_decision": None,
-            "stats": []
+            "stats": [],
+            "iteration_count": 0,
+            "max_iterations": max_iters
         }
         
-        return self.graph.invoke(initial_state)
+        return self.graph.invoke(initial_state, config={"recursion_limit": self.recursion_limit})
     
     def stream(self, research_question: str):
         """Stream the research execution, yielding state updates.
@@ -440,6 +544,14 @@ class DynamicResearchSystemBuilder:
         if not self.graph:
             self.build()
         
+        # Set max iterations based on complexity
+        complexity_map = {
+            "simple": 5,
+            "moderate": 15,
+            "complex": 25
+        }
+        max_iters = complexity_map.get(self.config.complexity, 15)
+
         initial_state = {
             "research_question": research_question,
             "messages": [HumanMessage(content=research_question)],
@@ -447,10 +559,12 @@ class DynamicResearchSystemBuilder:
             "findings": {},
             "final_report": "",
             "supervisor_decision": None,
-            "stats": []
+            "stats": [],
+            "iteration_count": 0,
+            "max_iterations": max_iters
         }
-        
-        return self.graph.stream(initial_state)
+    
+        return self.graph.stream(initial_state, config={"recursion_limit": self.recursion_limit})
 
 
 # ============================================================================

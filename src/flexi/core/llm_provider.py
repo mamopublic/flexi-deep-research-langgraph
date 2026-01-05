@@ -42,42 +42,46 @@ def get_llm(model_name: str,
             temperature: float = 0, 
             max_tokens: int = 4096) -> BaseLanguageModel:
     """
-    Create a language model instance based on the model name,
-    prioritizing OpenRouter if available.
+    Create a language model instance based on the model name.
+    
+    Logic:
+    1. If OpenRouter key is present, use it with the provided model_name (interpreted as slug).
+    2. If not, and Anthropic key is present, use ChatAnthropic with smart stripping:
+       - Strips 'anthropic/' prefix if present
+       - Maps 'google/' models to sane Anthropic defaults
     """
     openrouter_key = settings.OPENROUTER_API_KEY
     anthropic_key = settings.ANTHROPIC_API_KEY
     
     # 1. Try OpenRouter first
     if is_valid_key(openrouter_key):
-        or_model_name = model_name
-        # Map canonical Claude names to OpenRouter names if needed
-        if model_name.startswith("claude-") and "/" not in model_name:
-            if "3-5-sonnet" in model_name:
-                or_model_name = "anthropic/claude-3.5-sonnet"
-            elif "3-opus" in model_name:
-                or_model_name = "anthropic/claude-3-opus"
-            elif "3-haiku" in model_name:
-                or_model_name = "anthropic/claude-3-haiku"
-            else:
-                or_model_name = f"anthropic/{model_name}"
-        
         return ChatOpenRouter(
-            model_name=or_model_name,
+            model_name=model_name,
             temperature=temperature,
             max_tokens=max_tokens,
             openai_api_key=openrouter_key
         )
     
     # 2. Fallback to Anthropic if applicable
-    if model_name.startswith("claude") and is_valid_key(anthropic_key):
+    if is_valid_key(anthropic_key):
+        anthropic_model = model_name
+        
+        # Smart mapping for direct Anthropic provider
+        if model_name.startswith("anthropic/"):
+            anthropic_model = model_name.replace("anthropic/", "")
+        elif model_name.startswith("google/") or model_name.startswith("openai/"):
+            # If we're using a budget Google/OpenAI model but only have Anthropic key,
+            # fallback to Haiku as the budget choice.
+            anthropic_model = "claude-haiku-4.5"
+            logger.warning(f"Direct Anthropic provider requested for non-Anthropic model '{model_name}'. Falling back to '{anthropic_model}'.")
+        
         return ChatAnthropic(
-            model=model_name, 
+            model=anthropic_model, 
             temperature=temperature,
             max_tokens=max_tokens,
             api_key=anthropic_key
         )
     
     # 3. Error handling
-    msg = f"Could not instantiate LLM for model '{model_name}'. Check your API keys."
+    msg = f"Could not instantiate LLM for model '{model_name}'. Check your API keys (OPENROUTER_API_KEY or ANTHROPIC_API_KEY)."
     raise ValueError(msg)

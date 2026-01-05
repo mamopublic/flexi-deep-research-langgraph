@@ -15,7 +15,7 @@ import requests
 import os
 import chromadb
 from chromadb.utils import embedding_functions
-from typing import Callable, Dict, List
+from typing import Callable, Dict, List, Any
 from dataclasses import dataclass
 from flexi.config.settings import settings
 
@@ -88,6 +88,15 @@ class ToolsRegistry:
     
     def get_tool(self, name: str) -> Callable:
         return self.tools.get(name)
+    
+    def call_tool(self, name: str, **kwargs) -> Any:
+        """Call a registered tool by name with arguments."""
+        tool_func = self.get_tool(name)
+        if not tool_func:
+            raise ValueError(f"Tool '{name}' not found in registry.")
+        
+        # In this implementation, tools are just functions
+        return tool_func(**kwargs)
     
     def list_all_metadata(self) -> List[ToolMetadata]:
         return list(self.metadata.values())

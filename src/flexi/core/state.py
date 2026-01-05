@@ -30,6 +30,8 @@ class ResearchState(TypedDict):
     findings: Annotated[Dict[str, str], merge_findings]
     stats: Annotated[List[Dict[str, Any]], merge_stats]
     final_report: Optional[str]
+    iteration_count: int
+    max_iterations: int
 
 
 def merge_tool_calls(left: List[Dict[str, Any]], right: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

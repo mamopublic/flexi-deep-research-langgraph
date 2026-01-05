@@ -12,32 +12,52 @@ class Settings(BaseSettings):
     SERPER_API_KEY: Optional[str] = None
     JINA_API_KEY: Optional[str] = None
     
-    # Models
-    # User requested "Advanced/Medium/Basic" tiers.
-    # Currently mapping all to "claude-3-5-sonnet-20241022" (representing "3.7")
-    LLM_MODEL_ADVANCED: str = "claude-sonnet-4"
-    LLM_MODEL_MEDIUM: str = "claude-sonnet-4"
-    LLM_MODEL_BASIC: str = "claude-sonnet-4"  # Could be Haiku later
+    # Tiered Model System (OpenRouter Slugs)
+    LLM_MODEL_STRATEGIC: str = "anthropic/claude-sonnet-4"
+    LLM_MODEL_ANALYTICAL: str = "anthropic/claude-haiku-4.5"
+    LLM_MODEL_SYNTHESIS: str = "google/gemini-2.5-flash"
     
-    DEFAULT_MODEL: str = "claude-sonnet-4"
+    DEFAULT_MODEL: str = "anthropic/claude-sonnet-4"
     OPENROUTER_MODEL_PREFIX: str = "anthropic/"
     
     # Role to Model Tier Mapping
-    # Advanced: Architect, Supervisor
-    # Medium: Researcher, Analyst, Clarifier, Summarizer, Custom
-    # Basic: Writer
+    # Strategic: Roles that design, orchestrate, or gather new information
+    # Analytical: Roles that process or analyze existing information
+    # Synthesis: Roles that format or present information
     ROLE_MODEL_MAPPING: Dict[str, str] = {
-        "architect": "advanced",
-        "supervisor": "advanced",
-        "researcher": "medium",
-        "analyst": "medium",
-        "clarifier": "medium",
-        "summarizer": "medium", 
-        "writer": "basic"
+        # Strategic Tier (Premium Models)
+        "architect": "strategic",
+        "supervisor": "strategic",
+        "researcher": "strategic",  # Promoted - critical for quality
+        
+        # Analytical Tier (Mid-Tier Models)
+        "analyst": "analytical",
+        "clarifier": "analytical",
+        
+        # Synthesis Tier (Budget Models)
+        "summarizer": "synthesis",
+        "writer": "synthesis",
+        "responder": "synthesis"
     }
+    
+    # Temperature Configuration by Role
+    # Lower = more deterministic, Higher = more creative
+    ROLE_TEMPERATURE_MAPPING: Dict[str, float] = {
+        "architect": 0.3,      # Creative system design, controlled
+        "supervisor": 0.2,     # Logical, deterministic delegation
+        "researcher": 0.5,     # Creative search queries, balanced extraction
+        "analyst": 0.3,        # Objective, analytical
+        "clarifier": 0.4,      # Slight creativity for rephrasing
+        "summarizer": 0.3,     # Factual condensation
+        "writer": 0.6,         # More creative for engaging prose
+        "responder": 0.2       # Direct factual answers
+    }
+    
+    # Default temperature for roles not in mapping
+    DEFAULT_TEMPERATURE: float = 0.5
 
     # Context Management
-    # If If True, subordinate agents receive curated context (saving tokens).
+    # If True, subordinate agents receive curated context (saving tokens).
     # If False, they receive full conversation history.
     MANAGE_CONVERSATION: bool = True
 
@@ -55,8 +75,20 @@ class Settings(BaseSettings):
     }
 
     # Cost Configuration (Prices in USD per 1 Million Tokens)
-    # Using Claude 3.5 Sonnet pricing as reference
     MODEL_COSTS: Dict[str, Dict[str, float]] = {
+        "anthropic/claude-sonnet-4": {
+            "input_cost_per_m": 3.00,
+            "output_cost_per_m": 15.00
+        },
+        "anthropic/claude-haiku-4.5": {
+            "input_cost_per_m": 1.00,
+            "output_cost_per_m": 5.00
+        },
+        "google/gemini-2.5-flash": {
+            "input_cost_per_m": 0.075,
+            "output_cost_per_m": 0.30
+        },
+        # Legacy support keys
         "claude-3-5-sonnet-20241022": {
             "input_cost_per_m": 3.00,
             "output_cost_per_m": 15.00

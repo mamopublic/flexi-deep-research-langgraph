@@ -50,6 +50,7 @@ class ArchitectConfig:
     agents: Dict[str, AgentConfig] = field(default_factory=dict)
     supervisor_mandatory: bool = True
     suggested_workflow: List[str] = field(default_factory=list) # Enhanced: Strategic plan
+    complexity: str = "moderate"
     stats: Optional[Dict[str, Any]] = None # New stats field
     
     def to_dict(self) -> Dict[str, Any]:
@@ -59,6 +60,7 @@ class ArchitectConfig:
             "agents": {role: config.to_dict() for role, config in self.agents.items()},
             "supervisor_mandatory": self.supervisor_mandatory,
             "suggested_workflow": self.suggested_workflow,
+            "complexity": self.complexity,
             "stats": self.stats
         }
     
@@ -69,8 +71,8 @@ class ArchitectAgent:
     """The architect agent that designs multi-agent deep research systems."""
     
     def __init__(self, model_name: str = None):
-        # Architect always uses the ADVANCED tier by default, as it's a crucial role
-        self.model = model_name or settings.LLM_MODEL_ADVANCED
+        # Architect always uses the STRATEGIC tier by default, as it's a crucial role
+        self.model = model_name or settings.LLM_MODEL_STRATEGIC
         self.llm = get_llm(model_name=self.model, temperature=0.3)
         self.tool_names = list(tools_registry.tools.keys())
         self.tools_metadata_text = tools_registry.get_metadata_text()
@@ -145,7 +147,8 @@ class ArchitectAgent:
             research_question=original_question,
             reasoning=config_dict.get("reasoning", ""),
             supervisor_mandatory=supervisor_mandatory,
-            suggested_workflow=config_dict.get("suggested_workflow", [])
+            suggested_workflow=config_dict.get("suggested_workflow", []),
+            complexity=config_dict.get("complexity", "moderate")
         )
         
         # Defined default dependencies (Hybrid Model)
@@ -158,16 +161,20 @@ class ArchitectAgent:
         }
         
         agents_dict = config_dict.get("agents", {})
-        for role_str, agent_dict in agents_dict.items():
-            # Determine dependencies
-            # If standard role, enforce default. If custom, check config or default to nothing.
-            if role_str in default_dependencies:
-                dependencies = default_dependencies[role_str]
+        for name_key, agent_dict in agents_dict.items():
+            # Standardize role identification
+            # We strictly use the 'role' field as the identity key
+            role_type = agent_dict.get("role", name_key)
+            
+            # Determine dependencies based on role type
+            if role_type in default_dependencies:
+                dependencies = default_dependencies[role_type]
             else:
                 dependencies = agent_dict.get("context_dependencies", [])
 
-            architect_config.agents[role_str] = AgentConfig(
-                role=role_str,
+            # COLLAPSE: Use role_type as the key, even if name_key was different
+            architect_config.agents[role_type] = AgentConfig(
+                role=role_type,
                 system_prompt=agent_dict.get("system_prompt", ""),
                 tools=agent_dict.get("tools", []),
                 description=agent_dict.get("description", ""),
@@ -200,5 +207,5 @@ class ArchitectAgent:
 
 def create_architect(model_name: str = None) -> ArchitectAgent:
     """Factory function to create an architect agent."""
-    model = model_name or settings.LLM_MODEL_ADVANCED
+    model = model_name or settings.LLM_MODEL_STRATEGIC
     return ArchitectAgent(model_name=model)

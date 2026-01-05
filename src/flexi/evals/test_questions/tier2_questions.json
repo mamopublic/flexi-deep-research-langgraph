@@ -1,0 +1,32 @@
+[
+    {
+        "id": "c1",
+        "question": "Analyze trade-offs between FastAPI and Actix-web in production, specifically focusing on memory management and async models.",
+        "expected_themes": [
+            "memory management",
+            "async performance",
+            "ecosystem"
+        ],
+        "min_sections": 4
+    },
+    {
+        "id": "c2",
+        "question": "Synthesize JavaScript closure patterns from YDKJS and cross-reference with Google's engineering standards for complexity management.",
+        "expected_themes": [
+            "closures",
+            "readability",
+            "complexity"
+        ],
+        "min_sections": 5
+    },
+    {
+        "id": "c3",
+        "question": "Compare Rust learning curve vs Python ecosystem maturity for a team of junior developers, providing specific recommendations based on long-term maintenance.",
+        "expected_themes": [
+            "learning curve",
+            "ecosystem",
+            "maintenance"
+        ],
+        "min_sections": 5
+    }
+]

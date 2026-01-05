@@ -1,0 +1,27 @@
+[
+    {
+        "id": "q1",
+        "question": "Compare Python vs Rust for web backends",
+        "expected_tools": [
+            "search_tavily",
+            "search_serper"
+        ],
+        "kb_expected": false
+    },
+    {
+        "id": "q2",
+        "question": "Explain JavaScript closures using the You Don't Know JS knowledge base",
+        "expected_tools": [
+            "query_javascript_kb"
+        ],
+        "kb_expected": true
+    },
+    {
+        "id": "q3",
+        "question": "What are Google's code review best practices for readability?",
+        "expected_tools": [
+            "query_engineering_practices_kb"
+        ],
+        "kb_expected": true
+    }
+]

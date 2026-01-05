@@ -208,3 +208,8 @@ __marimo__/
 
 # Chroma
 .chroma_db/
+
+# Flexi Deep Research Evaluation Results
+eval_results/
+*_test_output.json
+*_test_report.md

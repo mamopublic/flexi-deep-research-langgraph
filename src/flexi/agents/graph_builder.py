@@ -84,7 +84,7 @@ def _get_last_supervisor_instruction(messages: List[BaseMessage]) -> Optional[st
 # AGENT EXECUTOR: TOKEN-EFFICIENT VERSION
 # ============================================================================
 
-def create_agent_executor(agent_config: AgentConfig, model_name: str) -> callable:
+def create_agent_executor(agent_name: str, agent_config: AgentConfig, model_name: str) -> callable:
     """
     Create a token-efficient executor for a research agent.
     
@@ -133,8 +133,9 @@ def create_agent_executor(agent_config: AgentConfig, model_name: str) -> callabl
         
         # ✅ STEP 3: CRITICAL FIX - Add THIS agent's prior work if it exists
         # This allows the agent to know what it already found and continue
-        if agent_config.role in state.get('findings', {}):
-            prior_work = state['findings'][agent_config.role]
+        # We use agent_name (unique) rather than role to support multiple specialists
+        if agent_name in state.get('findings', {}):
+            prior_work = state['findings'][agent_name]
             messages.append(
                 HumanMessage(
                     content=f"""Your previous work (which may be incomplete):
@@ -255,8 +256,8 @@ IMPORTANT RULES:
         # ✅ STEP 7: Return state update
         return {
             "messages": [AIMessage(content=final_response.content)],
-            "findings": {agent_config.role: final_response.content},
-            "current_agent": agent_config.role,
+            "findings": {agent_name: final_response.content},
+            "current_agent": agent_name,
             "stats": [stats_record],
             "iteration_count": state.get("iteration_count", 0) + 1
         }
@@ -441,6 +442,7 @@ class DynamicResearchSystemBuilder:
                 )
             else:
                 self.agents[name] = create_agent_executor(
+                    name,
                     agent_config, 
                     model_for_agent
                 )

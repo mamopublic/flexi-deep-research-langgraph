@@ -13,6 +13,10 @@ class ComprehensiveEval:
         with open(self.questions_path, "r") as f:
             self.test_cases = json.load(f)
         self.judge = ReportJudge() # Uses heavier model (e.g. Sonnet)
+        # Move results out of src/ for project hygiene
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
+        self.results_dir = os.path.join(project_root, "eval_results", "comprehensive")
+        os.makedirs(self.results_dir, exist_ok=True)
     
     def run(self):
         print(f"\n{'#'*60}")
@@ -66,6 +70,11 @@ class ComprehensiveEval:
             
             print(f"  -> Clarity: {result['metrics']['clarity']}/5 | Citation: {result['metrics']['citation']}/5")
             print(f"  -> Cost: ${result['metrics']['cost']} | Efficiency: {result['metrics']['tool_efficiency']}/5")
+            
+            # Save report for this case
+            report_path = os.path.join(self.results_dir, f"comprehensive_{case['id']}_report.md")
+            with open(report_path, "w") as f:
+                f.write(report)
 
         # Aggregation
         avg_clarity = sum(r["metrics"]["clarity"] for r in results) / len(results)
@@ -79,6 +88,19 @@ class ComprehensiveEval:
         print(f"Avg Citation: {avg_citation:.1f}/5")
         print(f"Total Cost: ${total_cost:.4f}")
         print(f"{'#'*60}\n")
+        
+        # Save summary
+        summary_path = os.path.join(self.results_dir, "comprehensive_eval_summary.json")
+        summary = {
+            "timestamp": datetime.now().isoformat(),
+            "avg_clarity": avg_clarity,
+            "avg_citation": avg_citation,
+            "total_cost": total_cost,
+            "results": results
+        }
+        with open(summary_path, "w") as f:
+            json.dump(summary, f, indent=2)
+        print(f"Summary and reports saved to {self.results_dir}")
         
         return results
 

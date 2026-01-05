@@ -89,10 +89,29 @@ class ArchitectAgent:
             templates_text += f"  Variables: {tmpl.get('variables', [])}\n"
             templates_text += f"  Base Prompt Preview: {tmpl.get('base_prompt', '')[:100].replace(chr(10), ' ')}...\n\n"
         
+        # Define mode-specific instructions
+        if settings.ARCHITECT_ALLOW_CUSTOM_ROLES:
+            mode_instructions = f"""
+    **EXPERIMENTAL MODE: CUSTOM SPECIALISTS ALLOWED**
+    1. You MAY define up to {settings.ARCHITECT_MAX_CUSTOM_ROLES} custom specialist roles.
+    2. Custom roles MUST match a standard template for their 'role' field.
+    3. Example: Key 'js_researcher' with role 'researcher'.
+    4. Benefit: Multiple specialists can gather diverse data without memory collisions.
+    5. Constraints: Custom roles should be derived from [researcher, analyst, clarifier].
+    """
+        else:
+            mode_instructions = """
+    **BASELINE MODE: STRICT ROLES ONLY**
+    1. You MUST choose exclusively from this fixed set of roles: supervisor, clarifier, researcher, analyst, summarizer, writer.
+    2. You are NOT allowed to invent new role names or new agent types.
+    3. JSON Keys MUST match roles (e.g., 'researcher' as key, not 'js_researcher').
+    """
+
         return template.format(
             tool_catalog=self.tools_metadata_text,
             role_templates_text=templates_text,
-            research_question=research_question
+            research_question=research_question,
+            mode_instructions=mode_instructions
         )
     
     def design_system(self, research_question: str) -> ArchitectConfig:
@@ -163,7 +182,6 @@ class ArchitectAgent:
         agents_dict = config_dict.get("agents", {})
         for name_key, agent_dict in agents_dict.items():
             # Standardize role identification
-            # We strictly use the 'role' field as the identity key
             role_type = agent_dict.get("role", name_key)
             
             # Determine dependencies based on role type
@@ -172,8 +190,13 @@ class ArchitectAgent:
             else:
                 dependencies = agent_dict.get("context_dependencies", [])
 
-            # COLLAPSE: Use role_type as the key, even if name_key was different
-            architect_config.agents[role_type] = AgentConfig(
+            # Use name_key as the primary identity unless we are in strict baseline mode
+            # and name_key isn't a role.
+            agent_id = name_key
+            if not settings.ARCHITECT_ALLOW_CUSTOM_ROLES:
+                agent_id = role_type # Collapse to role in baseline
+
+            architect_config.agents[agent_id] = AgentConfig(
                 role=role_type,
                 system_prompt=agent_dict.get("system_prompt", ""),
                 tools=agent_dict.get("tools", []),
@@ -183,6 +206,23 @@ class ArchitectAgent:
                 context_dependencies=dependencies
             )
         
+        # Post-process dependencies: Map role dependencies to all agents fulfilling that role
+        # e.g., if an agent depends on "researcher", add all agents with role "researcher"
+        role_to_names = {}
+        for name, config in architect_config.agents.items():
+            if config.role not in role_to_names:
+                role_to_names[config.role] = []
+            role_to_names[config.role].append(name)
+            
+        for name, config in architect_config.agents.items():
+            expanded_deps = set()
+            for dep in config.context_dependencies:
+                if dep in role_to_names:
+                    expanded_deps.update(role_to_names[dep])
+                else:
+                    expanded_deps.add(dep)
+            config.context_dependencies = list(expanded_deps)
+
         # Inject Strategic Plan into Supervisor Prompt
         if architect_config.suggested_workflow and "supervisor" in architect_config.agents:
             supervisor_agent = architect_config.agents["supervisor"]

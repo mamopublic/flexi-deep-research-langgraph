@@ -61,6 +61,10 @@ class Settings(BaseSettings):
     # If False, they receive full conversation history.
     MANAGE_CONVERSATION: bool = True
 
+    # Architect Customization Toggle
+    ARCHITECT_ALLOW_CUSTOM_ROLES: bool = False
+    ARCHITECT_MAX_CUSTOM_ROLES: int = 2
+
     # Chroma Knowledge Base Config
     CHROMA_DB_DIR: str = ".chroma_db"
     CHROMA_COLLECTION_NAME: str = "flexi_knowledge_base"

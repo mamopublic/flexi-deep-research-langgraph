@@ -104,15 +104,7 @@ architect:
       "supervisor_mandatory": true
     }}
 
-    **CRITICAL RULES**:
-    1. **JSON Keys MUST match roles**: Use 'researcher' as the key, not 'js_researcher'.
-    2. **DO NOT invent custom names**: If you need specialization, use 'persona_instruction'.
-    3. **role** MUST be one of: responder, researcher, analyst, clarifier, summarizer, writer, supervisor
-    4. **template_used** MUST match the role (no custom templates allowed)
-    5. 'supervisor' is MANDATORY for moderate/complex tasks
-    6. system_prompt must be specific and detailed (3-5 sentences minimum)
-    7. tools: 1-4 per agent (NOT 0, NOT 5+)
-    8. Different agents should have different tools
+    {mode_instructions}
 
     ## Tool Availability
 

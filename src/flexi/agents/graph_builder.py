@@ -15,7 +15,7 @@ Context Dependencies:
 
 from typing import Dict, Any, List, Optional, Annotated
 from langgraph.graph import StateGraph, START, END
-from langchain_core.messages import HumanMessage, AIMessage, BaseMessage
+from langchain_core.messages import HumanMessage, AIMessage, BaseMessage, SystemMessage, ToolMessage
 import operator
 import time
 import re
@@ -119,47 +119,11 @@ def create_agent_executor(agent_name: str, agent_config: AgentConfig, model_name
     def agent_executor(state: ResearchState) -> Dict[str, Any]:
         """Execute this agent with minimal, focused context."""
         
-        # ✅ STEP 1: Get relevant findings (filtered by dependencies)
-        relevant_findings = {
-            k: v for k, v in state.get('findings', {}).items() 
-            if k in agent_config.context_dependencies
-        }
-        
-        # ✅ STEP 2: Build minimal message context
-        # This is the key optimization: we DON'T use full state['messages']
-        messages = [
-            HumanMessage(content=f"Research Question: {state['research_question']}")
-        ]
-        
-        # ✅ STEP 3: CRITICAL FIX - Add THIS agent's prior work if it exists
-        # This allows the agent to know what it already found and continue
-        # We use agent_name (unique) rather than role to support multiple specialists
-        if agent_name in state.get('findings', {}):
-            prior_work = state['findings'][agent_name]
-            messages.append(
-                HumanMessage(
-                    content=f"""Your previous work (which may be incomplete):
-
-{prior_work}
-
-The supervisor wants you to continue or refine this work. See the task below."""
-                )
-            )
-        
-        # ✅ STEP 4: Add last supervisor instruction if it exists
-        # This tells the agent what specifically to do
-        if state.get('messages'):
-            last_instruction = _get_last_supervisor_instruction(state['messages'])
-            if last_instruction:
-                messages.append(HumanMessage(content=f"Supervisor's instruction:\n{last_instruction}"))
-        
-        # ✅ STEP 5: Build system prompt with findings context
-        # Final safety net: Replace {regime_instructions} if it's still there
+        # ✅ STEP 1: Process System Instructions
         raw_system_prompt = agent_config.system_prompt
         if "{regime_instructions}" in raw_system_prompt:
             raw_system_prompt = raw_system_prompt.replace("{regime_instructions}", settings.REGIME_INSTRUCTIONS)
         elif "##" in raw_system_prompt and "OPTIMIZATION HINTS" not in raw_system_prompt and "GUIDANCE" not in raw_system_prompt:
-            # Prepend if it's a structural prompt and doesn't have hints yet
             raw_system_prompt = f"{settings.REGIME_INSTRUCTIONS}\n\n{raw_system_prompt}"
 
         tools_context = (
@@ -167,25 +131,73 @@ The supervisor wants you to continue or refine this work. See the task below."""
             if agent_config.tools 
             else "No tools available."
         )
-        
-        system_prompt = f"""{raw_system_prompt}
 
-RESEARCH QUESTION: {state['research_question']}
+        system_message = SystemMessage(content=f"""{raw_system_prompt}
 
 {tools_context}
-
-CONTEXT FROM PRIOR AGENTS:
-{_format_findings(relevant_findings)}
 
 IMPORTANT RULES:
 1. Use tools to gather actual evidence. Do not just talk about it.
 2. When you have enough information, provide a substantive FINAL answer.
-3. If you have prior work on this task, refine and complete it."""
+3. If you have prior work on this task, refine and complete it.""")
+
+        # ✅ STEP 2: Build Message Context (Episodic Memory)
+        messages = [system_message]
         
-        messages.append(HumanMessage(content=system_prompt))
+        # ✅ STEP 2.5: Restore this agent's specific history (Search Memory)
+        # This prevents redundant tool calls between supervisor handoffs.
+        if state.get('messages'):
+            my_history = []
+            is_my_msg = False
+            for msg in state['messages']:
+                if isinstance(msg, SystemMessage):
+                    continue
+                if isinstance(msg, AIMessage):
+                    # In LangGraph/LangChain, assigned 'name' helps us filter turns
+                    if getattr(msg, 'name', None) == agent_name:
+                        is_my_msg = True
+                        my_history.append(msg)
+                    else:
+                        is_my_msg = False
+                elif isinstance(msg, ToolMessage) and is_my_msg:
+                    my_history.append(msg)
+            
+            messages.extend(my_history)
+        
+        # ✅ STEP 3: Add Relevant Findings as Assistant Messages
+        relevant_findings = {
+            k: v for k, v in state.get('findings', {}).items() 
+            if k in agent_config.context_dependencies
+        }
+        
+        if relevant_findings:
+            findings_text = "CONTEXT FROM PRIOR AGENTS:\n" + _format_findings(relevant_findings)
+            messages.append(AIMessage(content=findings_text, name="ContextProvider"))
+        
+        # ✅ STEP 4: Add THIS agent's prior work as an Assistant message
+        if agent_name in state.get('findings', {}):
+            prior_work = state['findings'][agent_name]
+            messages.append(
+                AIMessage(
+                    content=f"Your previous work on this task (which may be incomplete):\n\n{prior_work}",
+                    name=agent_name
+                )
+            )
+        
+        # ✅ STEP 5: Add Research Question and Supervisor Instruction as Human Message
+        task_content = f"RESEARCH QUESTION: {state['research_question']}\n\n"
+        
+        if state.get('messages'):
+            last_instruction = _get_last_supervisor_instruction(state['messages'])
+            if last_instruction:
+                task_content += f"SUPERVISOR'S INSTRUCTION: {last_instruction}"
+        
+        messages.append(HumanMessage(content=task_content))
+        
+        # ✅ STEP 5.5: Mark end of transient context
+        events_start_index = len(messages)
         
         # ✅ STEP 6: Execute with TOOL-CALLING LOOP
-        from langchain_core.messages import ToolMessage
         
         # Bind tools to the LLM
         available_tools = [
@@ -262,8 +274,15 @@ IMPORTANT RULES:
         }
         
         # ✅ STEP 7: Return state update
+        # We return the new messages (LLM response + ToolResults) for persistence.
+        # This allows the 'Restore' logic in Step 2.5 to find them later.
+        turn_events = messages[events_start_index:]
+        for msg in turn_events:
+            if isinstance(msg, AIMessage):
+                msg.name = agent_name
+        
         return {
-            "messages": [AIMessage(content=final_response.content)],
+            "messages": turn_events,
             "findings": {agent_name: final_response.content},
             "current_agent": agent_name,
             "stats": [stats_record],
@@ -316,27 +335,24 @@ def create_supervisor_executor(
         if remaining <= 2:
             iteration_notice = f"\n⚠️ WARNING: Budget nearly exhausted ({remaining} steps left). YOU MUST FINISH AND ASSIGN TO A WRITER/SUMMARIZER NOW."
 
-        system_prompt = f"""{raw_system_prompt}
-
-RESEARCH QUESTION: {state['research_question']}
+        system_message = SystemMessage(content=f"""{raw_system_prompt}
 
 AVAILABLE AGENTS: {', '.join(subordinate_roles)}
 
-CURRENT PROGRESS: Iteration {iteration_count} of {max_iterations}{iteration_notice}
-
-CURRENT FINDINGS:
-{findings_summary}
-
-DECISION: 
+DECISION RULES: 
 - If research is complete, respond with: FINISH
 - Otherwise, respond with: NEXT: [agent_name]
-- Followed by brief reasoning (1-2 sentences)
-"""
-        
-        # ✅ Minimal message context for supervisor too
-        # Just the question and findings summary
+- Followed by brief reasoning (1-2 sentences)""")
+
+        # ✅ Build Message Context
         messages = [
-            HumanMessage(content=system_prompt)
+            system_message,
+            AIMessage(content=f"CURRENT FINDINGS:\n{findings_summary}", name="ResearchLedger"),
+            HumanMessage(content=f"""RESEARCH QUESTION: {state['research_question']}
+
+CURRENT PROGRESS: Iteration {iteration_count} of {max_iterations}{iteration_notice}
+
+Identify the next logical step.""")
         ]
         
         start_time = time.time()
@@ -478,6 +494,10 @@ class DynamicResearchSystemBuilder:
             
             # Supervisor routing logic
             def router(state: ResearchState) -> str:
+                # Hard Stop: Technical guardrail for budget
+                if state.get("iteration_count", 0) >= state.get("max_iterations", 15):
+                    return END
+                
                 decision = state.get("supervisor_decision")
                 return END if (decision == "END" or not decision) else decision
             
@@ -501,18 +521,15 @@ class DynamicResearchSystemBuilder:
         
         self.graph = builder.compile()
         
-        # Set recursion limit based on complexity
-        # LangGraph limits (transitions). Each user 'iteration' is ~2 transitions.
-        # Simple (5 iters) -> 12-15 transitions
-        # Moderate (15 iters) -> 35-40 transitions
-        # Complex (25 iters) -> 60-70 transitions
-        complexity_limits = {
-            "simple": 15,
-            "moderate": 40,
-            "complex": 70
+        # Precision Calibration: Ensure recursion_limit > max_iterations * 3
+        # transitions = 1 (start) + max_iters * 2 (round trip) + overhead
+        complexity_map = {
+            "simple": 5,
+            "moderate": 15,
+            "complex": 25
         }
-        limit = complexity_limits.get(self.config.complexity, 40)
-        self.recursion_limit = limit
+        max_iters = complexity_map.get(self.config.complexity, 15)
+        self.recursion_limit = (max_iters * 3) + 10
         
         return self.graph
     

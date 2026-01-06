@@ -9,14 +9,16 @@ class ComparativeRunner:
     def __init__(self):
         project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
         self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.base_results_dir = os.path.join(project_root, "eval_results", "comparative", self.timestamp)
+        regime = "open" if settings.USE_OPENSOURCE_MODELS else "closed"
+        self.base_results_dir = os.path.join(project_root, "eval_results", "comparative", f"{self.timestamp}_{regime}")
         os.makedirs(self.base_results_dir, exist_ok=True)
         
     def _run_eval(self, allow_custom: bool, label: str):
         print(f"\n🚀 Running {label} Eval (allow_custom_roles={allow_custom})...")
         
         # We override settings at runtime for the duration of this process
-        subfolder = f"comparative/{self.timestamp}/{label.lower()}"
+        regime_slug = "open" if settings.USE_OPENSOURCE_MODELS else "closed"
+        subfolder = f"comparative/{self.timestamp}_{regime_slug}/{label.lower()}"
         
         env = os.environ.copy()
         env["FLEXI_ARCHITECT_ALLOW_CUSTOM_ROLES"] = str(allow_custom)
@@ -77,10 +79,13 @@ class ComparativeRunner:
         print("="*60)
 
     def _generate_report(self, baseline, experimental):
+        regime = "Open Source" if settings.USE_OPENSOURCE_MODELS else "Closed Source"
         lines = []
-        lines.append("# Comparative Research Evaluation Report")
+        lines.append(f"# Comparative Research Evaluation Report ({regime})")
         lines.append(f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        lines.append(f"Run Directory: `eval_results/comparative/{self.timestamp}/`")
+        lines.append(f"Model Regime: **{regime}**")
+        regime_slug = "open" if settings.USE_OPENSOURCE_MODELS else "closed"
+        lines.append(f"Run Directory: `eval_results/comparative/{self.timestamp}_{regime_slug}/`")
         lines.append("\n## Summary Metrics")
         
         table = [

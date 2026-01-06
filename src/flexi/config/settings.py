@@ -12,13 +12,48 @@ class Settings(BaseSettings):
     SERPER_API_KEY: Optional[str] = None
     JINA_API_KEY: Optional[str] = None
     
-    # Tiered Model System (OpenRouter Slugs)
-    LLM_MODEL_STRATEGIC: str = "anthropic/claude-sonnet-4"
-    LLM_MODEL_ANALYTICAL: str = "anthropic/claude-haiku-4.5"
-    LLM_MODEL_SYNTHESIS: str = "google/gemini-2.5-flash"
-    
-    DEFAULT_MODEL: str = "anthropic/claude-sonnet-4"
-    OPENROUTER_MODEL_PREFIX: str = "anthropic/"
+    # Multi-Regime Model Configuration
+    USE_OPENSOURCE_MODELS: bool = True
+
+    @property
+    def REGIME_INSTRUCTIONS(self) -> str:
+        """Get optimization hints based on the active model regime."""
+        if self.USE_OPENSOURCE_MODELS:
+            return (
+                "## OPEN-SOURCE OPTIMIZATION HINTS:\n"
+                "- **AVOID REDUNDANCY**: Do not call the same tool with the same or near-identical arguments.\n"
+                "- **DIVERSIFY QUERIES**: If a query yields poor results, change your semantic angle immediately.\n"
+                "- **BE CONCISE**: Prioritize raw data and direct evidence over conversational prose.\n"
+                "- **ONE SHOT**: Try to define all your necessary tool calls in a single thought if possible."
+            )
+        return (
+            "## FRONTIER MODEL GUIDANCE:\n"
+            "- **DEEP SYNTHESIS**: Focus on connecting non-obvious patterns across findings.\n"
+            "- **LATENT REASONING**: Use your broad knowledge to bridge gaps between search results.\n"
+            "- **NARRATIVE QUALITY**: Maintain high structural and prose quality in all outputs."
+        )
+
+    # Explicit Model Overrides (defaults to None, filled in model_post_init)
+    LLM_MODEL_STRATEGIC: Optional[str] = None
+    LLM_MODEL_RESEARCH: Optional[str] = None
+    LLM_MODEL_ANALYTICAL: Optional[str] = None
+    LLM_MODEL_SYNTHESIS: Optional[str] = None
+    DEFAULT_MODEL: Optional[str] = None
+
+    def model_post_init(self, __context: Any) -> None:
+        """Finalize model selections based on regime if not explicitly provided."""
+        if self.USE_OPENSOURCE_MODELS:
+            self.LLM_MODEL_STRATEGIC = self.LLM_MODEL_STRATEGIC or "meta-llama/llama-3.3-70b-instruct"
+            self.LLM_MODEL_RESEARCH = self.LLM_MODEL_RESEARCH or "deepseek/deepseek-r1"
+            self.LLM_MODEL_ANALYTICAL = self.LLM_MODEL_ANALYTICAL or "qwen/qwen3-32b"
+            self.LLM_MODEL_SYNTHESIS = self.LLM_MODEL_SYNTHESIS or "google/gemini-2.5-flash"
+        else:
+            self.LLM_MODEL_STRATEGIC = self.LLM_MODEL_STRATEGIC or "anthropic/claude-sonnet-4"
+            self.LLM_MODEL_RESEARCH = self.LLM_MODEL_RESEARCH or "openai/gpt-4o"
+            self.LLM_MODEL_ANALYTICAL = self.LLM_MODEL_ANALYTICAL or "anthropic/claude-haiku-4.5"
+            self.LLM_MODEL_SYNTHESIS = self.LLM_MODEL_SYNTHESIS or "google/gemini-2.5-flash"
+        
+        self.DEFAULT_MODEL = self.DEFAULT_MODEL or self.LLM_MODEL_STRATEGIC
     
     # Role to Model Tier Mapping
     # Strategic: Roles that design, orchestrate, or gather new information
@@ -28,7 +63,7 @@ class Settings(BaseSettings):
         # Strategic Tier (Premium Models)
         "architect": "strategic",
         "supervisor": "strategic",
-        "researcher": "strategic",  # Promoted - critical for quality
+        "researcher": "research",  # Specialized tier for tool usage
         
         # Analytical Tier (Mid-Tier Models)
         "analyst": "analytical",
@@ -89,8 +124,24 @@ class Settings(BaseSettings):
             "output_cost_per_m": 5.00
         },
         "google/gemini-2.5-flash": {
-            "input_cost_per_m": 0.075,
-            "output_cost_per_m": 0.30
+            "input_cost_per_m": 0.30,   # Updated as per user request
+            "output_cost_per_m": 2.50   # Updated as per user request
+        },
+        "meta-llama/llama-3.3-70b-instruct": {
+            "input_cost_per_m": 0.10,
+            "output_cost_per_m": 0.32
+        },
+        "deepseek/deepseek-r1": {
+            "input_cost_per_m": 0.70,
+            "output_cost_per_m": 2.40
+        },
+        "openai/gpt-4o": {
+            "input_cost_per_m": 2.50,
+            "output_cost_per_m": 10.00
+        },
+        "qwen/qwen3-32b": {
+            "input_cost_per_m": 0.08,
+            "output_cost_per_m": 0.24
         },
         # Legacy support keys
         "claude-3-5-sonnet-20241022": {

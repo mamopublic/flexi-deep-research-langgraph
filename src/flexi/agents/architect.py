@@ -87,7 +87,7 @@ class ArchitectAgent:
         for role, tmpl in role_templates.items():
             templates_text += f"TEMPLATE: {role}\n"
             templates_text += f"  Variables: {tmpl.get('variables', [])}\n"
-            templates_text += f"  Base Prompt Preview: {tmpl.get('base_prompt', '')[:100].replace(chr(10), ' ')}...\n\n"
+            templates_text += f"  Base Prompt Preview: {tmpl.get('base_prompt', '')[:120].replace(chr(10), ' ')}...\n\n"
         
         # Define mode-specific instructions
         if settings.ARCHITECT_ALLOW_CUSTOM_ROLES:
@@ -196,9 +196,16 @@ class ArchitectAgent:
             if not settings.ARCHITECT_ALLOW_CUSTOM_ROLES:
                 agent_id = role_type # Collapse to role in baseline
 
+            # Inject Regime Instructions
+            system_prompt = agent_dict.get("system_prompt", "")
+            if "{regime_instructions}" in system_prompt:
+                system_prompt = system_prompt.replace("{regime_instructions}", settings.REGIME_INSTRUCTIONS)
+            elif "##" in system_prompt: # If it's a structural prompt, prepend it
+                system_prompt = f"{settings.REGIME_INSTRUCTIONS}\n\n{system_prompt}"
+
             architect_config.agents[agent_id] = AgentConfig(
                 role=role_type,
-                system_prompt=agent_dict.get("system_prompt", ""),
+                system_prompt=system_prompt,
                 tools=agent_dict.get("tools", []),
                 description=agent_dict.get("description", ""),
                 template_used=agent_dict.get("template_used"),

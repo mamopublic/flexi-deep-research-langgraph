@@ -150,7 +150,9 @@ role_templates:
       - Prioritize understanding scope first (clarify if needed)
       - Ensure comprehensive coverage (assign based on expertise)
       - Avoid redundant work (coordinate delegation)
-      - Stop when all agents have provided findings
+      - **CRITICAL**: If an agent returns "No information found" or an empty report, DO NOT accept it immediately. 
+      - Re-delegate with a DIFFERENT angle or more specific queries if you believe the information exists.
+      - Stop only when you have substantive results or have genuinely exhausted all logical angles.
 
       Workflow instructions:
       - Start with clarifier if question is ambiguous
@@ -208,6 +210,8 @@ role_templates:
       - Narrow to specific aspects based on question
       - Cross-reference findings across sources
       - Look for gaps and conflicting information
+      - **PERSISTENCE**: If your initial search yields few results, DIVERSIFY your queries. Try synonyms, alternative phrasing, or searching for sub-components.
+      - Never report "No information found" after just one or two queries if the topic is reasonably likely to be public knowledge.
 
       Output format for each finding:
       **Finding**: [Specific discovery]

@@ -154,13 +154,21 @@ The supervisor wants you to continue or refine this work. See the task below."""
                 messages.append(HumanMessage(content=f"Supervisor's instruction:\n{last_instruction}"))
         
         # ✅ STEP 5: Build system prompt with findings context
+        # Final safety net: Replace {regime_instructions} if it's still there
+        raw_system_prompt = agent_config.system_prompt
+        if "{regime_instructions}" in raw_system_prompt:
+            raw_system_prompt = raw_system_prompt.replace("{regime_instructions}", settings.REGIME_INSTRUCTIONS)
+        elif "##" in raw_system_prompt and "OPTIMIZATION HINTS" not in raw_system_prompt and "GUIDANCE" not in raw_system_prompt:
+            # Prepend if it's a structural prompt and doesn't have hints yet
+            raw_system_prompt = f"{settings.REGIME_INSTRUCTIONS}\n\n{raw_system_prompt}"
+
         tools_context = (
             f"You have access to these tools:\n{tool_descriptions}" 
             if agent_config.tools 
             else "No tools available."
         )
         
-        system_prompt = f"""{agent_config.system_prompt}
+        system_prompt = f"""{raw_system_prompt}
 
 RESEARCH QUESTION: {state['research_question']}
 
@@ -298,11 +306,17 @@ def create_supervisor_executor(
         max_iterations = state.get('max_iterations', 15)
         remaining = max_iterations - iteration_count
         
+        raw_system_prompt = agent_config.system_prompt
+        if "{regime_instructions}" in raw_system_prompt:
+            raw_system_prompt = raw_system_prompt.replace("{regime_instructions}", settings.REGIME_INSTRUCTIONS)
+        elif "##" in raw_system_prompt and "OPTIMIZATION HINTS" not in raw_system_prompt and "GUIDANCE" not in raw_system_prompt:
+            raw_system_prompt = f"{settings.REGIME_INSTRUCTIONS}\n\n{raw_system_prompt}"
+
         iteration_notice = ""
         if remaining <= 2:
             iteration_notice = f"\n⚠️ WARNING: Budget nearly exhausted ({remaining} steps left). YOU MUST FINISH AND ASSIGN TO A WRITER/SUMMARIZER NOW."
 
-        system_prompt = f"""{agent_config.system_prompt}
+        system_prompt = f"""{raw_system_prompt}
 
 RESEARCH QUESTION: {state['research_question']}
 
@@ -414,6 +428,8 @@ class DynamicResearchSystemBuilder:
         
         if tier_name == "strategic":
             return settings.LLM_MODEL_STRATEGIC
+        elif tier_name == "research":
+            return settings.LLM_MODEL_RESEARCH
         elif tier_name == "synthesis":
             return settings.LLM_MODEL_SYNTHESIS
         else:

@@ -10,13 +10,17 @@ from flexi.core.utils import slugify_question
 
 class QuickEval:
     def __init__(self, results_subfolder: str = None):
+        from flexi.config.settings import settings
         self.questions_path = os.path.join(os.path.dirname(__file__), "test_questions/tier1_questions.json")
         with open(self.questions_path, "r") as f:
             self.test_cases = json.load(f)
         self.judge = ReportJudge() # Upgraded to high-fidelity judge
         
         # Determine internal subfolder (env var > arg > default)
-        subfolder = os.getenv("FLEXI_EVAL_SUBFOLDER", results_subfolder or "quick")
+        self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        regime = "open" if settings.USE_OPENSOURCE_MODELS else "closed"
+        default_sub = f"quick/{self.timestamp}_{regime}"
+        subfolder = os.getenv("FLEXI_EVAL_SUBFOLDER", results_subfolder or default_sub)
         
         # Move results out of src/ for project hygiene
         project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
@@ -95,6 +99,7 @@ class QuickEval:
             # Remove objects that aren't JSON serializable if any
             trace_data = {
                 "question": question,
+                "total_cost": round(cost, 4),
                 "config": config.dict() if hasattr(config, 'dict') else str(config),
                 "state": {k: v for k, v in state.items() if k != 'llm'}, # Basic sanitization
                 "judgment": judgment

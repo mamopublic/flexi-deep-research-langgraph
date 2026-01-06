@@ -8,18 +8,19 @@ from flexi.config.settings import settings
 class ComparativeRunner:
     def __init__(self):
         project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
-        self.results_dir = os.path.join(project_root, "eval_results", "comparative")
-        self.eval_results_dir = os.path.join(project_root, "eval_results", "quick")
-        os.makedirs(self.results_dir, exist_ok=True)
+        self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.base_results_dir = os.path.join(project_root, "eval_results", "comparative", self.timestamp)
+        os.makedirs(self.base_results_dir, exist_ok=True)
         
     def _run_eval(self, allow_custom: bool, label: str):
         print(f"\n🚀 Running {label} Eval (allow_custom_roles={allow_custom})...")
         
         # We override settings at runtime for the duration of this process
-        # Since settings is a singleton loaded at import, we'll run the eval as a subprocess
-        # with an environment variable that we can pick up.
+        subfolder = f"comparative/{self.timestamp}/{label.lower()}"
+        
         env = os.environ.copy()
         env["FLEXI_ARCHITECT_ALLOW_CUSTOM_ROLES"] = str(allow_custom)
+        env["FLEXI_EVAL_SUBFOLDER"] = subfolder
         
         start_time = time.time()
         # Set PYTHONPATH to include src directory
@@ -42,8 +43,10 @@ class ComparativeRunner:
             
         print(f"✅ {label} Eval finished in {duration:.2f}s")
         
-        # Load the summary created by quick_eval
-        summary_path = os.path.join(self.eval_results_dir, "quick_eval_summary.json")
+        # Load the summary created by quick_eval (it will be in eval_results/{subfolder})
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
+        summary_path = os.path.join(project_root, "eval_results", subfolder, "quick_eval_summary.json")
+        
         if os.path.exists(summary_path):
             with open(summary_path, "r") as f:
                 return json.load(f)
@@ -63,8 +66,7 @@ class ComparativeRunner:
         # 3. Generate Comparative Report
         report = self._generate_report(baseline_results, experimental_results)
         
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        report_path = os.path.join(self.results_dir, f"comparison_report_{timestamp}.md")
+        report_path = os.path.join(self.base_results_dir, "comparison_report.md")
         
         with open(report_path, "w") as f:
             f.write(report)
@@ -78,6 +80,7 @@ class ComparativeRunner:
         lines = []
         lines.append("# Comparative Research Evaluation Report")
         lines.append(f"Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        lines.append(f"Run Directory: `eval_results/comparative/{self.timestamp}/`")
         lines.append("\n## Summary Metrics")
         
         table = [
@@ -104,11 +107,12 @@ class ComparativeRunner:
 
         b_cost = baseline.get("total_cost", 0)
         e_cost = experimental.get("total_cost", 0)
-        table.append(f"| Total Cost | ${b_cost:.4f} | ${e_cost:.4f} | {((e_cost-b_cost)/b_cost)*100:+.1f}% |")
+        table.append(f"| Total Cost | ${b_cost:.4f} | ${e_cost:.4f} | {((e_cost-b_cost)/b_cost)*100:+.1f}% if {b_cost} > 0 else 'N/A' |")
         
         lines.extend(table)
         
         lines.append("\n## Per-Question Breakdown")
+        lines.append("*Notation: (C: Clarity, R: Reasoning, T: Citation)*")
         q_table = [
             "| Question | Baseline | Experimental | Result |",
             "| :--- | :---: | :---: | :--- |"
@@ -126,9 +130,13 @@ class ComparativeRunner:
             b_status = "✅" if br.get("completion") else "❌"
             e_status = "✅" if er.get("completion") else "❌"
             
-            # Show clarity score in status
-            b_info = f"{b_status} (C:{br.get('metrics', {}).get('clarity')})"
-            e_info = f"{e_status} (C:{er.get('metrics', {}).get('clarity')})"
+            # Show full metric triple: (C, R, T)
+            def fmt_metrics(r):
+                m = r.get('metrics', {})
+                return f"(C:{m.get('clarity') or '-'}, R:{m.get('reasoning') or '-'}, T:{m.get('citation') or '-'})"
+
+            b_info = f"{b_status} {fmt_metrics(br)}"
+            e_info = f"{e_status} {fmt_metrics(er)}"
             
             comparison = ""
             if b_status == "✅" and e_status == "✅":

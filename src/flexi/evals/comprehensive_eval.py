@@ -6,16 +6,21 @@ from flexi.agents.architect import create_architect
 from flexi.agents.graph_builder import DynamicResearchSystemBuilder
 from flexi.evals.metrics import calculate_all_metrics, calculate_tool_efficiency
 from flexi.evals.judges import ReportJudge
+from flexi.core.utils import slugify_question
 
 class ComprehensiveEval:
-    def __init__(self):
+    def __init__(self, results_subfolder: str = None):
         self.questions_path = os.path.join(os.path.dirname(__file__), "test_questions/tier2_questions.json")
         with open(self.questions_path, "r") as f:
             self.test_cases = json.load(f)
         self.judge = ReportJudge() # Uses heavier model (e.g. Sonnet)
+        
+        # Determine internal subfolder (env var > arg > default)
+        subfolder = os.getenv("FLEXI_EVAL_SUBFOLDER", results_subfolder or "comprehensive")
+        
         # Move results out of src/ for project hygiene
         project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
-        self.results_dir = os.path.join(project_root, "eval_results", "comprehensive")
+        self.results_dir = os.path.join(project_root, "eval_results", subfolder)
         os.makedirs(self.results_dir, exist_ok=True)
     
     def run(self):
@@ -71,10 +76,27 @@ class ComprehensiveEval:
             print(f"  -> Clarity: {result['metrics']['clarity']}/5 | Citation: {result['metrics']['citation']}/5")
             print(f"  -> Cost: ${result['metrics']['cost']} | Efficiency: {result['metrics']['tool_efficiency']}/5")
             
-            # Save report for this case
-            report_path = os.path.join(self.results_dir, f"comprehensive_{case['id']}_report.md")
-            with open(report_path, "w") as f:
+            # Save report and trace in question-specific subfolder
+            slug = slugify_question(question)
+            case_dir = os.path.join(self.results_dir, slug)
+            os.makedirs(case_dir, exist_ok=True)
+            
+            # Report
+            with open(os.path.join(case_dir, "report.md"), "w") as f:
                 f.write(report)
+            
+            # Trace (Full State)
+            trace_data = {
+                "question": question,
+                "config": config.dict() if hasattr(config, 'dict') else str(config),
+                "state": {k: v for k, v in state.items() if k != 'llm'},
+                "judgment": judgment
+            }
+            with open(os.path.join(case_dir, "trace.json"), "w") as f:
+                try:
+                    json.dump(trace_data, f, indent=2, default=str)
+                except Exception as e:
+                    f.write(f"Error serializing trace: {str(e)}")
 
         # Aggregation
         avg_clarity = sum(r["metrics"]["clarity"] for r in results) / len(results)

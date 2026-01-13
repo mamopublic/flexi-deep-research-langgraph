@@ -3,8 +3,7 @@
         "id": "q1",
         "question": "Compare Python vs Rust for web backends",
         "expected_tools": [
-            "search_tavily",
-            "search_serper"
+            "web_search"
         ],
         "kb_expected": false
     },

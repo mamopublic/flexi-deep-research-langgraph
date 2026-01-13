@@ -15,6 +15,7 @@ Context Dependencies:
 
 from typing import Dict, Any, List, Optional, Annotated
 from langgraph.graph import StateGraph, START, END
+from langgraph.types import Send
 from langchain_core.messages import HumanMessage, AIMessage, BaseMessage, SystemMessage, ToolMessage
 import operator
 import time
@@ -63,6 +64,67 @@ def _format_findings(findings: Dict[str, str]) -> str:
     
     return formatted
 
+
+def _prune_reasoning(content: str) -> str:
+    """Strip <think>...</think> tags from content."""
+    if not content:
+        return content
+    # Pattern for <think>...</think> and its variants
+    # Also handles cases where the model might forget to close the tag or uses different brackets
+    patterns = [
+        r'<think>.*?</think>',     # Standard
+        r'<thinking>.*?</thinking>', # Variant
+        r'\[thought\].*?\[/thought\]', # Variant
+        r'<think>.*$',             # Unclosed tag at end of string
+    ]
+    
+    pruned = content
+    for pattern in patterns:
+        pruned = re.sub(pattern, '', pruned, flags=re.DOTALL | re.IGNORECASE).strip()
+    
+    return pruned
+
+
+def _extract_markdown_tool_calls(content: str) -> List[Dict[str, Any]]:
+    """
+    Extract JSON tool calls from markdown code blocks as a fallback 
+    for models that don't support native tool calling API well.
+    """
+    import json
+    import os
+    if not content or "```" not in content:
+        return []
+    
+    tool_calls = []
+    # Match ```json ... ``` blocks
+    pattern = r'```(?:json)?\s*(.*?)\s*```'
+    matches = re.finditer(pattern, content, re.DOTALL)
+    
+    for match in matches:
+        try:
+            potential_json = match.group(1).strip()
+            # Handle list of calls or single call object
+            data = json.loads(potential_json)
+            
+            if isinstance(data, list):
+                for item in data:
+                    if isinstance(item, dict) and ("name" in item or "action" in item):
+                        tool_calls.append({
+                            "name": item.get("name") or item.get("action"),
+                            "args": item.get("arguments") or item.get("args") or item.get("action_input") or {},
+                            "id": f"markdown_tc_{os.urandom(4).hex()}"
+                        })
+            elif isinstance(data, dict):
+                if "name" in data or "action" in data:
+                    tool_calls.append({
+                        "name": data.get("name") or data.get("action"),
+                        "args": data.get("arguments") or data.get("args") or data.get("action_input") or {},
+                        "id": f"markdown_tc_{os.urandom(4).hex()}"
+                    })
+        except Exception:
+            continue
+            
+    return tool_calls
 
 def _get_last_supervisor_instruction(messages: List[BaseMessage]) -> Optional[str]:
     """Extract the last supervisor instruction from message history.
@@ -187,7 +249,18 @@ IMPORTANT RULES:
         # ✅ STEP 5: Add Research Question and Supervisor Instruction as Human Message
         task_content = f"RESEARCH QUESTION: {state['research_question']}\n\n"
         
-        if state.get('messages'):
+        # Priority 1: Parallel tasking instruction
+        parallel_inst = None
+        if state.get('next_tasks'):
+            for task in state['next_tasks']:
+                if task.get('agent') == agent_name:
+                    parallel_inst = task.get('instruction')
+                    break
+        
+        if parallel_inst:
+            task_content += f"YOUR SPECIFIC TASK: {parallel_inst}"
+        elif state.get('messages'):
+            # Priority 2: Last global supervisor instruction
             last_instruction = _get_last_supervisor_instruction(state['messages'])
             if last_instruction:
                 task_content += f"SUPERVISOR'S INSTRUCTION: {last_instruction}"
@@ -232,12 +305,17 @@ IMPORTANT RULES:
             messages.append(response)
             
             # Check for tool calls
-            if not response.tool_calls:
+            tool_calls = response.tool_calls
+            if not tool_calls:
+                # Fallback: Try extracting from markdown if no native calls
+                tool_calls = _extract_markdown_tool_calls(response.content)
+            
+            if not tool_calls:
                 final_response = response
                 break
                 
             # Execute tools
-            for tool_call in response.tool_calls:
+            for tool_call in tool_calls:
                 tool_name = tool_call["name"]
                 tool_args = tool_call["args"]
                 
@@ -280,13 +358,20 @@ IMPORTANT RULES:
         for msg in turn_events:
             if isinstance(msg, AIMessage):
                 msg.name = agent_name
+                # Prune reasoning from persistent history
+                if msg.content:
+                    msg.content = _prune_reasoning(msg.content)
+        
+        # Also prune findings to keep the ResearchLedger clean
+        clean_findings = _prune_reasoning(final_response.content)
         
         return {
             "messages": turn_events,
-            "findings": {agent_name: final_response.content},
+            "findings": {agent_name: clean_findings},
             "current_agent": agent_name,
             "stats": [stats_record],
-            "iteration_count": state.get("iteration_count", 0) + 1
+            "iteration_count": state.get("iteration_count", 0) + 1,
+            "completed_branches": 1 # Signal completion to join node
         }
     
     return agent_executor
@@ -341,7 +426,8 @@ AVAILABLE AGENTS: {', '.join(subordinate_roles)}
 
 DECISION RULES: 
 - If research is complete, respond with: FINISH
-- Otherwise, respond with: NEXT: [agent_name]
+- To run a single agent, respond with: NEXT: [agent_name]
+- To run multiple agents in parallel, respond with: PARALLEL: [agent_name_1]: "specific instruction", [agent_name_2]: "specific instruction"
 - Followed by brief reasoning (1-2 sentences)""")
 
         # ✅ Build Message Context
@@ -355,6 +441,18 @@ CURRENT PROGRESS: Iteration {iteration_count} of {max_iterations}{iteration_noti
 Identify the next logical step.""")
         ]
         
+        # OPTIMIZATION: Check if writer has already finished
+        if "writer" in state.get("findings", {}) and len(state["findings"]["writer"]) > 100:
+            return {
+                "messages": [AIMessage(content="Writer has completed the report. Finishing.")],
+                "supervisor_decision": "END",
+                "next_tasks": [],
+                "current_agent": "supervisor",
+                "stats": [],
+                "active_branches": 0,
+                "completed_branches": 0
+            }
+
         start_time = time.time()
         response = llm.invoke(messages)
         duration = round(time.time() - start_time, 2)
@@ -378,22 +476,91 @@ Identify the next logical step.""")
         # Parse supervisor decision
         content = response.content
         next_agent = None
+        next_tasks = []
         
-        if "NEXT:" in content:
-            match = re.search(r'NEXT:\s*(\w+)', content)
-            if match:
-                candidate = match.group(1).strip()
-                if candidate in subordinate_roles:
-                    next_agent = candidate
+        # 1. Look for a line containing a decision instruction
+        decision_line = None
+        lines = [line.strip() for line in content.split("\n")]
         
-        if "FINISH" in content.upper() and not next_agent:
+        # Priority 1: Line starting with PARALLEL:
+        for line in lines:
+            if line.upper().startswith("PARALLEL:"):
+                decision_line = line
+                break
+        
+        # Priority 2: Line starting with NEXT:
+        if not decision_line:
+            for line in lines:
+                if line.upper().startswith("NEXT:"):
+                    decision_line = line
+                    break
+        
+        # Priority 3: Fallback to the very first line if no prefix found
+        if not decision_line:
+            decision_line = lines[0] if lines else ""
+
+        # Clean the decision line for parsing
+        parser_line = decision_line
+        while True:
+            upper_line = parser_line.upper()
+            if upper_line.startswith("NEXT:"):
+                parser_line = parser_line[5:].strip()
+            elif upper_line.startswith("PARALLEL:"):
+                parser_line = parser_line[9:].strip()
+            else:
+                break
+        
+        # 1. Check for PARALLEL (Explicit in prefix or inferred from commas)
+        is_parallel_prefix = decision_line.upper().startswith("PARALLEL:") or "PARALLEL:" in decision_line.upper()
+        if is_parallel_prefix or "," in parser_line:
+            # We use parser_line which is now stripped of NEXT: and PARALLEL:
+            task_blob = parser_line
+            
+            # Simple splitter for comma-separated tasks like agent: "instruction" or just agent
+            # This is a bit naive but works for standard formatting
+            parts = re.split(r',\s*(?=[^"]*(?:"[^"]*"[^"]*)*$)', task_blob)
+            
+            for part in parts:
+                if ":" in part:
+                    agent_part, inst_part = part.split(":", 1)
+                    a_name = agent_part.strip().strip("[]")
+                    a_instruction = inst_part.strip().strip('"').strip("'")
+                    if a_name in subordinate_roles:
+                        next_tasks.append({"agent": a_name, "instruction": a_instruction})
+                else:
+                    # Handle case where only agent name is provided
+                    a_name = part.strip().strip("[]")
+                    if a_name in subordinate_roles:
+                        next_tasks.append({"agent": a_name, "instruction": "Proceed with assigned research task."})
+            
+            if next_tasks:
+                next_agent = "PARALLEL"
+        
+        # 2. Check for NEXT (Fallback or explicit)
+        if not next_agent:
+            # Check parser_line first (it's stripped of prefixes)
+            if parser_line in subordinate_roles:
+                next_agent = parser_line
+            else:
+                # Last resort: generic regex search anywhere in the decision line
+                match = re.search(r'(?:NEXT:|PARALLEL:)?\s*(\w+)', decision_line, re.IGNORECASE)
+                if match:
+                    candidate = match.group(1).strip()
+                    if candidate in subordinate_roles:
+                        next_agent = candidate
+        
+        # 3. Check for FINISH
+        if not next_agent and "FINISH" in content.upper():
             next_agent = "END"
         
         return {
             "messages": [AIMessage(content=content)],
             "supervisor_decision": next_agent,
+            "next_tasks": next_tasks,
             "current_agent": "supervisor",
-            "stats": [stats_record]
+            "stats": [stats_record],
+            "active_branches": len(next_tasks) if next_agent == "PARALLEL" else 0,
+            "completed_branches": 0
         }
     
     return supervisor_executor
@@ -493,23 +660,90 @@ class DynamicResearchSystemBuilder:
             builder.add_edge(START, supervisor_role)
             
             # Supervisor routing logic
-            def router(state: ResearchState) -> str:
+            def router(state: ResearchState) -> Any:
                 # Hard Stop: Technical guardrail for budget
                 if state.get("iteration_count", 0) >= state.get("max_iterations", 15):
                     return END
                 
                 decision = state.get("supervisor_decision")
-                return END if (decision == "END" or not decision) else decision
+                if decision == "END" or not decision:
+                    return END
+                
+                
+                # OPTIMIZATION: If writer just finished, force end (don't ask supervisor again)
+                # This prevents "I'll just check it one more time" loops
+                if state.get("current_agent") == "writer":
+                    return END
+
+                if decision == "PARALLEL":
+                    # Dynamic Fan-out using Send API
+                    next_tasks = state.get("next_tasks", [])
+                    if not next_tasks:
+                        return END
+                    
+                    return [
+                        Send(task["agent"], {
+                            "research_question": state["research_question"],
+                            "iteration_count": state["iteration_count"],
+                            "max_iterations": state["max_iterations"],
+                            "messages": state.get("messages", []), # Pass history for search memory
+                            "findings": state.get("findings", {}),
+                            "stats": [], 
+                            "next_tasks": [{"agent": task["agent"], "instruction": task["instruction"]}], # Pass instructions
+                            "completed_branches": 0
+                        }) 
+                        for task in next_tasks
+                    ]
+                
+                return decision
             
             builder.add_conditional_edges(
                 supervisor_role,
                 router,
-                {END: END, **{r: r for r in subordinate_roles}}
+                {END: END, "PARALLEL": END, **{r: r for r in subordinate_roles}}
+            )
+
+            # Join Node Logic (Barrier)
+            join_node_name = "synthesis_join"
+            def synthesis_join(state: ResearchState) -> Dict[str, Any]:
+                """Barrier that wait for all parallel branches to finish."""
+                active = state.get("active_branches", 0)
+                completed = state.get("completed_branches", 0)
+                
+                # If we were in parallel mode and not everyone finished, wait
+                if active > 1 and completed < active:
+                    return {} # No-op, just wait for others
+                
+                # Otherwise (sequential or parallel-finished), reset and move on
+                return {
+                    "active_branches": 0,
+                    "completed_branches": -1, # Special reset signal for reducer
+                    "current_agent": "join_processor"
+                }
+
+            builder.add_node(join_node_name, synthesis_join)
+            
+            # Join Router: Barrier that blocks until all parallel branches converge
+            def join_router(state: ResearchState) -> str:
+                active = state.get("active_branches", 0)
+                completed = state.get("completed_branches", 0)
+                
+                # Sequential mode or Parallel finished
+                if active <= 1 or completed >= active:
+                    return supervisor_role
+                
+                # Still waiting for other parallel branches
+                return END
+
+            builder.add_conditional_edges(
+                join_node_name,
+                join_router,
+                {supervisor_role: supervisor_role, END: END}
             )
             
-            # All subordinates return to supervisor
+            # Subordinates return to Join Node
             for role in subordinate_roles:
-                builder.add_edge(role, supervisor_role)
+                builder.add_edge(role, join_node_name)
         else:
             # SINGLE AGENT: For simple questions
             if not self.agents:

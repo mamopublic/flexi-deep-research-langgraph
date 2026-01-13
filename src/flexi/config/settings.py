@@ -102,7 +102,7 @@ class Settings(BaseSettings):
 
     # Chroma Knowledge Base Config
     CHROMA_DB_DIR: str = ".chroma_db"
-    CHROMA_COLLECTION_NAME: str = "flexi_knowledge_base"
+    CHROMA_COLLECTION_NAME: str = "javascript-core"
     
     # MCP Server Configuration
     MCP_SERVERS: Dict[str, Dict[str, Any]] = {

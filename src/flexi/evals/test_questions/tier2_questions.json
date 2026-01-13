@@ -1,31 +1,73 @@
 [
     {
         "id": "c1",
-        "question": "Analyze trade-offs between FastAPI and Actix-web in production, specifically focusing on memory management and async models.",
+        "question": "Evaluate the 'Zustand' state management library for adoption, strictly comparing its patterns against the 'Google Engineering Practices' knowledge base regarding code complexity and readability. Use external search for Zustand and internal KB for standards.",
+        "expected_tools": [
+            "web_search",
+            "query_engineering_practices_kb"
+        ],
         "expected_themes": [
-            "memory management",
-            "async performance",
-            "ecosystem"
+            "complexity",
+            "readability",
+            "boilerplate",
+            "google standards"
         ],
         "min_sections": 4
     },
     {
         "id": "c2",
-        "question": "Synthesize JavaScript closure patterns from YDKJS and cross-reference with Google's engineering standards for complexity management.",
+        "question": "Conduct a performance and developer experience comparison of Node.js vs Deno vs Bun for building high-concurrency WebSocket servers in 2025. Focus on benchmarks, ecosystem maturity, and compatibility.",
+        "expected_tools": [
+            "web_search"
+        ],
         "expected_themes": [
-            "closures",
-            "readability",
-            "complexity"
+            "latency",
+            "websocket support",
+            "npm compatibility",
+            "benchmarks"
         ],
         "min_sections": 5
     },
     {
         "id": "c3",
-        "question": "Compare Rust learning curve vs Python ecosystem maturity for a team of junior developers, providing specific recommendations based on long-term maintenance.",
+        "question": "Provide a deep technical explanation of how closures and lexical scope interact in JavaScript (referencing 'You Don't Know JS' KB) vs how Python handles closures (referencing 'late binding' issues). Highlight the practical pitfalls in both.",
+        "expected_tools": [
+            "query_javascript_kb",
+            "web_search"
+        ],
         "expected_themes": [
-            "learning curve",
-            "ecosystem",
-            "maintenance"
+            "lexical scope",
+            "late binding",
+            "memory leaks",
+            "var vs let"
+        ],
+        "min_sections": 4
+    },
+    {
+        "id": "c4",
+        "question": "What is the consensus on 'React Server Components' (RSC) as of late 2024? Synthesize the primary criticisms from the community and the counter-arguments from the React team.",
+        "expected_tools": [
+            "web_search"
+        ],
+        "expected_themes": [
+            "complexity",
+            "network waterfall",
+            "vendor lock-in",
+            "performance"
+        ],
+        "min_sections": 4
+    },
+    {
+        "id": "c5",
+        "question": "Design a migration strategy for a monolithic Django application to a Rust-based microservices architecture using Actix-web. Outline the risks, necessary team upskilling, and architectural changes required.",
+        "expected_tools": [
+            "web_search"
+        ],
+        "expected_themes": [
+            "hiring diffculty",
+            "interop",
+            "gradual migration",
+            "actix maturity"
         ],
         "min_sections": 5
     }

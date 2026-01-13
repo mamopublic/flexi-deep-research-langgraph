@@ -16,6 +16,7 @@ dependencies = [
     "certifi",
     "chromadb",
     "sentence-transformers",
+    "duckduckgo-search",
 ]
 
 [project.optional-dependencies]
@@ -33,3 +34,7 @@ target-version = "py311"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = "test_*.py"
+markers = [
+    "integration: mark tests that run against real LLMs (slow, costs money)",
+    "unit: mark fast unit tests"
+]

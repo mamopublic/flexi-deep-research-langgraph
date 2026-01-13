@@ -6,6 +6,7 @@ import re
 from flexi.core.llm_provider import get_llm
 from flexi.core.tools import tools_registry
 from flexi.config.settings import prompts, settings
+from tenacity import retry, stop_after_attempt, wait_fixed, retry_if_exception_type
 
 @dataclass
 class AgentConfig:
@@ -101,10 +102,10 @@ class ArchitectAgent:
     """
         else:
             mode_instructions = """
-    **BASELINE MODE: STRICT ROLES ONLY**
-    1. You MUST choose exclusively from this fixed set of roles: supervisor, clarifier, researcher, analyst, summarizer, writer.
-    2. You are NOT allowed to invent new role names or new agent types.
-    3. JSON Keys MUST match roles (e.g., 'researcher' as key, not 'js_researcher').
+    **BASELINE MODE: STANDARD ROLES**
+    1. You SHOULD use the 6 base roles where possible: supervisor, clarifier, researcher, analyst, summarizer, writer.
+    2. If you need multiple agents of the same role for parallel work, use descriptive keys like 'researcher_python' and 'researcher_rust'.
+    3. Ensure consistency: the ID used in the agents dictionary MUST match the ID used in your workflow.
     """
 
         return template.format(
@@ -114,6 +115,7 @@ class ArchitectAgent:
             mode_instructions=mode_instructions
         )
     
+    @retry(stop=stop_after_attempt(3), wait=wait_fixed(2), retry=retry_if_exception_type((json.JSONDecodeError, ValueError)))
     def design_system(self, research_question: str) -> ArchitectConfig:
         """Design a multi-agent system for the given research question."""
         prompt = self._build_architect_prompt(research_question)
@@ -140,31 +142,67 @@ class ArchitectAgent:
 
         response_text = response.content.strip()
         
+        # Extract Design Rationale (text before JSON) and JSON config
+        rationale = ""
+        config_dict = {}
+        
         try:
-            # Handle markdown code blocks
+            # Step 1: Extract JSON block
             if "```" in response_text:
-                json_match = re.search(r'```(?:json)?\n(.*?)\n```', response_text, re.DOTALL)
-                if json_match:
-                    response_text = json_match.group(1).strip()
+                # Capture everything before the first code block as rationale
+                code_block_start = response_text.find("```")
+                possible_rationale = response_text[:code_block_start].strip()
+                # Clean up header "## DESIGN RATIONALE"
+                if "## DESIGN RATIONALE" in possible_rationale:
+                    rationale = possible_rationale.split("## DESIGN RATIONALE")[-1].strip()
                 else:
-                    response_text = response_text.replace("```json", "").replace("```", "").strip()
-            
-            config_dict = json.loads(response_text)
-        except json.JSONDecodeError as e:
+                    rationale = possible_rationale
+
+                json_match = re.search(r'```(?:json)?\s*(.*?)\s*```', response_text, re.DOTALL)
+                if json_match:
+                    json_text = json_match.group(1).strip()
+                else:
+                    # Fallback
+                    json_text = response_text.replace("```json", "").replace("```", "").strip()
+            # If no code blocks but looks like JSON
+            elif response_text.strip().startswith("{"):
+                json_text = response_text
+            else:
+                # Malformed mix
+                raise ValueError("Could not find JSON code block in response")
+
+            # Parse JSON
+            try:
+                config_dict = json.loads(json_text)
+            except json.JSONDecodeError:
+                 # Fallback: Find outermost {}
+                if "{" in json_text and "}" in json_text:
+                    start = json_text.find("{")
+                    end = json_text.rfind("}")
+                    potential_json = json_text[start:end+1]
+                    config_dict = json.loads(potential_json)
+                else:
+                    raise
+
+        except Exception as e:
             print(f"Failed to parse architect response: {e}")
             raise
         
-        config = self._parse_config_dict(config_dict, research_question)
+        # If JSON has internal 'reasoning' field, merge it or prefer external rationale
+        if not rationale and "reasoning" in config_dict:
+            rationale = config_dict["reasoning"]
+            
+        config = self._parse_config_dict(config_dict, research_question, rationale)
         config.stats = stats_record
         return config
     
-    def _parse_config_dict(self, config_dict: Dict[str, Any], original_question: str) -> ArchitectConfig:
+    def _parse_config_dict(self, config_dict: Dict[str, Any], original_question: str, rationale: str = "") -> ArchitectConfig:
         # Check complexity to infer defaults if needed, though we trust the specific field
         supervisor_mandatory = config_dict.get("supervisor_mandatory", True)
         
         architect_config = ArchitectConfig(
             research_question=original_question,
-            reasoning=config_dict.get("reasoning", ""),
+            reasoning=rationale or config_dict.get("reasoning", ""),
             supervisor_mandatory=supervisor_mandatory,
             suggested_workflow=config_dict.get("suggested_workflow", []),
             complexity=config_dict.get("complexity", "moderate")
@@ -190,11 +228,10 @@ class ArchitectAgent:
             else:
                 dependencies = agent_dict.get("context_dependencies", [])
 
-            # Use name_key as the primary identity unless we are in strict baseline mode
-            # and name_key isn't a role.
+            # Use name_key as the primary identity.
+            # We don't collapse anymore as it causes supervisor naming mismatches.
+            # The 'role' field will still handle the model tier mapping.
             agent_id = name_key
-            if not settings.ARCHITECT_ALLOW_CUSTOM_ROLES:
-                agent_id = role_type # Collapse to role in baseline
 
             # Inject Regime Instructions
             system_prompt = agent_dict.get("system_prompt", "")

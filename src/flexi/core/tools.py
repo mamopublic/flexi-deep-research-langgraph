@@ -15,7 +15,8 @@ import requests
 import os
 import chromadb
 from chromadb.utils import embedding_functions
-from typing import Callable, Dict, List, Any
+from typing import Callable, Dict, List, Any, Optional
+from duckduckgo_search import DDGS
 from dataclasses import dataclass
 from flexi.config.settings import settings
 
@@ -163,16 +164,8 @@ except Exception as e:
 # ============================================================================
 
 
-@tools_registry.register(
-    use_cases=["research", "technical topics", "recent data", "quality sources"],
-    output_quality="high",
-    latency="medium",
-    cost="cheap",
-    reliability="production",
-    best_for="Deep technical research, academic topics, recent developments, comprehensive fact-finding",
-    avoid_when="Simple definitions, quick facts, when Serper is sufficient"
-)
-def search_tavily(query: str, search_depth: str = "smart", num_results: int = 5) -> str:
+# Note: No decorator here, keeping it available but hidden from public registry
+def search_tavily(query: str, search_depth: str = "advanced", num_results: int = 5) -> str:
     """
     Search the web using Tavily API for high-quality, research-oriented results.
     
@@ -182,8 +175,8 @@ def search_tavily(query: str, search_depth: str = "smart", num_results: int = 5)
     Parameters:
     - query (str): Search query. Use specific technical terms for best results.
       Example: "FastAPI performance benchmarks 2024"
-    - search_depth (str): "basic" (fast, standard) or "smart" (comprehensive, slower)
-      Default: "smart" - recommended for research tasks
+    - search_depth (str): "basic" (fast, standard) or "advanced" (comprehensive, slower, costs 2 credits)
+      Default: "advanced" - recommended for research tasks
     - num_results (int): Number of results (5-20 recommended, max 20)
       Default: 5
     
@@ -202,17 +195,24 @@ def search_tavily(query: str, search_depth: str = "smart", num_results: int = 5)
     if not api_key:
         return "Error: TAVILY_API_KEY not found in environment."
     
+    # Map 'smart' to 'advanced' for backward compatibility with older prompts/models
+    if search_depth == "smart":
+        search_depth = "advanced"
+    
     url = "https://api.tavily.com/search"
     payload = {
         "api_key": api_key,
         "query": query,
         "search_depth": search_depth,
-        "max_results": num_results
+        "max_results": min(max(num_results, 1), 20) # Ensure 1-20 range
     }
     
     try:
         response = requests.post(url, json=payload)
-        response.raise_for_status()
+        if response.status_code != 200:
+            error_msg = f"Tavily API Error {response.status_code}: {response.text}"
+            return f"Error calling Tavily API: {error_msg}"
+            
         data = response.json()
         results = data.get("results", [])
         formatted = []
@@ -223,15 +223,7 @@ def search_tavily(query: str, search_depth: str = "smart", num_results: int = 5)
         return f"Error calling Tavily API: {str(e)}"
 
 
-@tools_registry.register(
-    use_cases=["quick search", "news", "general queries", "speed over depth"],
-    output_quality="medium",
-    latency="fast",
-    cost="cheap",
-    reliability="production",
-    best_for="Quick fact-finding, breaking news, general web search, when speed is priority",
-    avoid_when="Deep technical research, need content summaries, require credibility assessment"
-)
+# Note: No decorator here, keeping it available but hidden from public registry
 def search_serper(query: str, num_results: int = 5) -> str:
     """
     Search Google using Serper API for fast, general web search results.
@@ -275,6 +267,83 @@ def search_serper(query: str, num_results: int = 5) -> str:
         return "\n".join(formatted) if formatted else "No results found."
     except Exception as e:
         return f"Error calling Serper API: {str(e)}"
+
+
+def search_ddg(query: str, num_results: int = 5) -> str:
+    """
+    Search the web using DuckDuckGo (Free, no API key required).
+    
+    Reliable but basic search. Best used as a persistent fallback.
+    Uses the duckduckgo-search library for high-quality results.
+    """
+    try:
+        results = []
+        with DDGS() as ddgs:
+            ddg_gen = ddgs.text(query, max_results=num_results)
+            for r in ddg_gen:
+                results.append(f"Title: {r.get('title')}\nURL: {r.get('href')}\nSnippet: {r.get('body')}\n")
+        
+        return "\n".join(results) if results else "No DuckDuckGo results found."
+    except Exception as e:
+        return f"Error calling DuckDuckGo: {str(e)}"
+
+
+@tools_registry.register(
+    use_cases=["general web search", "research", "quick lookups"],
+    output_quality="high",
+    latency="medium",
+    cost="cheap",
+    reliability="production",
+    best_for="Generic web search without caring about the underlying provider",
+    avoid_when="You explicitly want to compare Tavily vs Serper vs DuckDuckGo"
+)
+def web_search(
+    query: str,
+    num_results: int = 5,
+    mode: str = "fallback"  # "quality" or "fallback"
+) -> str:
+    """
+    General web search tool that hides the underlying provider choice.
+
+    Parameters:
+    - query (str): Search query
+    - num_results (int): Desired number of results (1-20)
+    - mode (str):
+        - "quality": prefer Tavily-style results (research-oriented)
+        - "fast": prefer Serper-style results (Google SERP)
+        - "fallback": use cheaper/free providers
+
+    This is meant for research on agent architectures, not provider selection.
+    """
+    # Normalize num_results
+    num_results = max(1, min(num_results, 20))
+
+    # Simple routing logic: keep it boring on purpose
+    # so it doesn't become the thing you're studying.
+    if mode == "fallback":
+        # Try Serper first, fall back to Tavily, then DDG
+        out = search_serper(query=query, num_results=num_results)
+        if out.lower().startswith("error"):
+            out = search_tavily(query=query, search_depth="basic", num_results=num_results)
+        if out.lower().startswith("error"):
+            out = search_ddg(query=query, num_results=num_results)
+        return out
+
+    elif mode == "fast":
+        # Prefer Serper
+        out = search_serper(query=query, num_results=num_results)
+        if out.lower().startswith("error"):
+            out = search_ddg(query=query, num_results=num_results)
+        return out
+
+    else:
+        # mode == "quality" (default)
+        out = search_tavily(query=query, search_depth="advanced", num_results=num_results)
+        if out.lower().startswith("error"):
+            out = search_serper(query=query, num_results=num_results)
+        if out.lower().startswith("error"):
+            out = search_ddg(query=query, num_results=num_results)
+        return out
 
 
 @tools_registry.register(
@@ -330,166 +399,12 @@ def crawl_jina(url: str) -> str:
 # ANALYSIS TOOLS
 # ============================================================================
 
-
-@tools_registry.register(
-    use_cases=["assumption validation", "claim verification", "critical review"],
-    output_quality="medium",
-    latency="fast",
-    cost="free",
-    reliability="beta",
-    best_for="Validating critical assumptions, checking claim validity, cross-referencing",
-    avoid_when="Definitive fact-checking (use search tools), need external sources"
-)
-def validate_assumptions(claim: str, context: str = "") -> str:
-    """
-    Validate critical assumptions in research findings.
-    
-    Reviews claims for internal consistency and logical validity.
-    Currently MOCK - should integrate with fact-checking service.
-    
-    Parameters:
-    - claim (str): The assumption or claim to validate
-    - context (str, optional): Additional context about the claim
-    
-    Returns:
-    - Validation result with confidence level
-    - Suggests search queries if validation needed
-    
-    Example:
-    - Claim: "Rust has 20x lower memory usage than Python"
-    - Output: "Needs context: depends on framework and workload. Recommend searching..."
-    
-    Status: MOCK - Implementation pending with fact-checking API
-    """
-    return f"[Mock] Validating claim: '{claim}' with context: '{context}'"
-
-
-@tools_registry.register(
-    use_cases=["synthesis", "finding summarization", "key insight extraction"],
-    output_quality="medium",
-    latency="fast",
-    cost="free",
-    reliability="beta",
-    best_for="Condensing findings into key points, identifying patterns across sources",
-    avoid_when="Need final formatted report (use write tools)"
-)
-def summarize_findings(findings: str) -> str:
-    """
-    Synthesize and summarize research findings into key insights.
-    
-    Extracts main points, identifies patterns, highlights contradictions.
-    Currently MOCK - should integrate with summarization agent.
-    
-    Parameters:
-    - findings (str): Raw findings text to summarize
-    
-    Returns:
-    - Condensed summary with key points and patterns
-    
-    Status: MOCK - Implementation pending
-    """
-    return f"[Mock] Summarizing findings..."
-
-
-@tools_registry.register(
-    use_cases=["report generation", "formatted output", "structured content"],
-    output_quality="medium",
-    latency="medium",
-    cost="free",
-    reliability="beta",
-    best_for="Generating formatted report sections, structuring findings",
-    avoid_when="Complex multi-section reports (use writer agent)"
-)
-def generate_report_section(section_type: str, findings: str) -> str:
-    """
-    Generate a formatted report section from findings.
-    
-    Creates structured sections like Executive Summary, Key Findings, Analysis, etc.
-    Currently MOCK - should integrate with writer agent.
-    
-    Parameters:
-    - section_type (str): Type of section ("summary", "findings", "analysis", "conclusion")
-    - findings (str): Content for the section
-    
-    Returns:
-    - Formatted markdown section
-    
-    Status: MOCK - Implementation pending
-    """
-    return f"[Mock] Generated {section_type} section."
-
-
 # ============================================================================
 # RESEARCH TOOLS
 # ============================================================================
 
 
-@tools_registry.register(
-    use_cases=["academic research", "peer-reviewed sources", "scholarly content"],
-    output_quality="high",
-    latency="slow",
-    cost="cheap",
-    reliability="beta",
-    best_for="Finding peer-reviewed papers, academic citations, scholarly sources",
-    avoid_when="Breaking news, commercial information, quick facts"
-)
-def search_academic_literature(query: str, num_results: int = 10) -> str:
-    """
-    Search academic literature and peer-reviewed papers.
-    
-    Finds scholarly sources, research papers, and academic content.
-    Currently MOCK - should integrate with academic search API (PubMed, arXiv, Google Scholar).
-    
-    Parameters:
-    - query (str): Research topic or paper search
-    - num_results (int): Number of papers to find (default 10)
-    
-    Returns:
-    - List of academic papers with citation info
-    - Links to paper abstracts
-    
-    Status: MOCK - Implementation pending
-    """
-    return f"[Mock] Found {num_results} papers for query: '{query}'"
 
-
-@tools_registry.register(
-    use_cases=["scope clarification", "question analysis", "research planning"],
-    output_quality="medium",
-    latency="fast",
-    cost="free",
-    reliability="beta",
-    best_for="Breaking down complex questions, clarifying scope, identifying research dimensions",
-    avoid_when="Simple direct questions"
-)
-def clarify_research_scope(research_question: str) -> str:
-    """
-    Clarify and break down complex research questions into manageable sub-questions.
-    
-    Identifies scope boundaries, key dimensions, and research areas.
-    Currently MOCK - should integrate with clarifier agent logic.
-    
-    Parameters:
-    - research_question (str): The question to clarify
-    
-    Returns:
-    - Clarified scope with:
-      * Sub-questions
-      * Key dimensions to investigate
-      * Scope boundaries (include/exclude)
-      * Undefined terms defined
-    
-    Example:
-    Input: "Compare Python vs Rust for web backends"
-    Output:
-    - Sub-Q1: Performance metrics (throughput, latency, memory)?
-    - Sub-Q2: Developer experience (learning curve, ecosystem)?
-    - Scope: Web backends only (not systems programming)
-    - Key terms: "high-performance" = 1000+ req/s
-    
-    Status: MOCK - Implementation pending with clarifier prompt integration
-    """
-    return f"[Mock] Clarified scope for: {research_question}"
 
 
 # ============================================================================
@@ -519,15 +434,7 @@ def list_knowledge_bases() -> str:
         return f"Error listing knowledge bases: {e}"
 
 
-@tools_registry.register(
-    use_cases=["retrieving internal documents", "checking past research", "accessing knowledge base"],
-    output_quality="high",
-    latency="fast",
-    cost="free",
-    reliability="production",
-    best_for="Accessing stored documents, company knowledge, or previously ingested text",
-    avoid_when="Searching for live/external web data (use Tavily/Serper)"
-)
+# Note: No decorator here. This is a helper for specific KB tools.
 def query_knowledge_base(query: str, collection_name: str = None, n_results: int = 3) -> str:
     """
     Query the local knowledge base (vector database) for relevant documents.

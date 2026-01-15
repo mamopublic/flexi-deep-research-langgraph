@@ -19,6 +19,17 @@ A unified evaluation engine (`src/flexi/evals/runner.py`) ensures reliability ac
 - **Architectural Flexibility**: capable of testing "flexible" architectures (Architect designs the team) vs "rigid" ones (fixed graph).
 - **Robustness**: Includes automatic tool validation (did it use the KB?) and resilient report extraction.
 
+### Evaluation Examples
+
+See **[examples/](examples/)** for a curated selection of evaluation results demonstrating:
+
+- **Comparative analysis**: Baseline vs. Experimental architecture performance
+- **Quality metrics**: Clarity, citation quality, and reasoning depth scores
+- **Cost analysis**: Token usage and API cost breakdowns
+- **Instructive failures**: Null results showing when flexibility underperforms structure
+
+**Preliminary Finding**: The comparative evaluation revealed that the experimental "flexible" architecture underperformed the baseline (80% vs 100% pass rate, +89% cost). This suggests that **well-grounded default role definitions** (Researcher, Analyst, Supervisor) - which are standard across deep research agents - provide better structure than free-form role selection. Further investigation with larger datasets is needed to confirm this pattern across diverse research scenarios.
+
 ## Quick Start
 
 ### 1. Installation
@@ -56,6 +67,12 @@ python src/flexi/evals/quick_eval.py
 python src/flexi/evals/comprehensive_eval.py
 ```
 *Runs 5 complex scenarios (Parallelism, Hybrid Search, Conflict Resolution).*
+
+**Comparative Study**:
+```bash
+python src/flexi/evals/run_comparison.py --suite [quick|comprehensive]
+```
+*Runs A/B tests between Baseline (Strict Roles) and Experimental (Flexible Roles) regimes, generating a detailed `comparison_report.md` with quality and cost deltas.*
 
 ## Rationale & Research Goals
 

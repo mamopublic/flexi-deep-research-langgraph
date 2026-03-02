@@ -25,3 +25,15 @@ Run Directory: `eval_results/comparative/20260113_215647_open/`
 ## Analysis
 - **Reliability Warning**: Custom roles introduced regressions.
 - **Efficiency**: Experimental mode was 89.3% more expensive.
+
+## Failure Analysis: Django Migration Regression
+
+The Django migration question (experimental ❌, Clarity: 1) was a **compound failure** traced from `experimental/django_migration/trace.json`:
+
+**Layer 1 — Supervisor routing lock-in** (primary cause): The supervisor (Llama 3.3 70B, strategic tier) dispatched `NEXT: migration_planner` for 11+ consecutive iterations after the agent had already produced a complete response. The custom role key `migration_planner` is outside Llama's trained vocabulary for standard agent names, so the model lacked reliable completion-detection priors for it. This consumed 22 of 25 iteration budget without advancing to `summarizer`.
+
+**Layer 2 — Synthesis-tier hallucination**: When finally routed to `summarizer` (Gemini Flash), the model emitted fake Python-syntax code blocks — `print(search_hacker_news(...))` — with hallucinated JSON "output" beneath them. These are not valid tool calls; `_extract_markdown_tool_calls()` parses JSON blocks, not Python. No real tools ran. The summarizer finding was raw fake-code.
+
+**Layer 3 — Budget exhaustion**: `task_completion = 0.0` (no `writer` finding, no `END` decision). The judge correctly scored the raw fake-code output as Clarity: 1.
+
+**Implication**: The failure is not generic "too much flexibility." It is specifically the interaction between *custom role naming* and a *weaker strategic model*. A stronger supervisor (e.g., Claude Sonnet) may not exhibit the same routing lock-in — this is a testable hypothesis for future runs.

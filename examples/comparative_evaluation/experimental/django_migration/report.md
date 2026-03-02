@@ -1,3 +1,13 @@
+> **⚠️ FAILURE ARTIFACT — Intentionally Preserved**
+>
+> This file is the raw output that caused the experimental architecture to score Clarity: 1, Reasoning: 1 on the Django migration question. It is **not** a broken file — it is kept here as a concrete record of the failure mode.
+>
+> **What you're looking at**: The `summarizer` agent (Gemini Flash) hallucinated fake Python-syntax tool calls (`print(search_hacker_news(...))`) with invented JSON "output" blocks beneath them. These were never executed — `_extract_markdown_tool_calls()` only parses JSON blocks, not Python code. The supervisor (Llama 3.3 70B) had already exhausted 22 of 25 iterations in a routing loop before reaching this agent, so no recovery was possible.
+>
+> See `trace.json` in this directory for the full execution trace, and `comparison_report.md` for the mechanistic breakdown.
+
+---
+
 ```json
 [
   {"tool_code": "print(search_hacker_news(\"strangler fig pattern microservices architecture\"))"},

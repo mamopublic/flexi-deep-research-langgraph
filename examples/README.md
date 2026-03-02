@@ -47,8 +47,8 @@ examples/
 │   └── experimental/                           # Custom architecture (experimental)
 │       ├── summary.json                        # Aggregate statistics
 │       └── django_migration/                   # Failure case (instructive!)
-│           ├── report.md                       # Low-quality output
-│           └── trace.json                      # Execution trace showing regression
+│           ├── report.md                       # Failure artifact (intentionally preserved)
+│           └── trace.json                      # Execution trace — source of mechanistic post-mortem
 └── quick_evaluation/                           # Rapid testing mode
     ├── summary.json                            # Quick eval statistics
     └── javascript_closures/                    # Example research output
@@ -82,14 +82,26 @@ examples/
 - Flexible citation patterns
 - Non-deterministic execution
 
-### The Instructive Failure
+### The Instructive Failure: Mechanistic Post-Mortem
 
 **Question**: "Design a migration strategy for a monolithic Django application to a Rust-based microservices architecture..."
 
 - **Baseline**: ✅ Comprehensive analysis (Clarity: 5, Reasoning: 5)
-- **Experimental**: ❌ Superficial response (Clarity: 1, Reasoning: 1)
+- **Experimental**: ❌ Raw hallucinated tool-code output (Clarity: 1, Reasoning: 1)
 
-**Why This Matters**: The failure case reveals that **autonomy without guardrails** leads to shortcuts - the agent skipped deep analysis in favor of generic recommendations.
+**What Actually Happened** (mined from `experimental/django_migration/trace.json`):
+
+This was a **three-layer compound failure**, not a simple "too much autonomy" story:
+
+1. **Supervisor routing lock-in (primary cause)**: After `migration_planner` (Qwen3-32b) produced a comprehensive answer on its first invocation, the supervisor (Llama 3.3 70B) kept emitting `NEXT: migration_planner` for **11+ consecutive iterations**. The model could not recognize the agent had completed its task, so it never advanced to `summarizer`. This consumed 22 of the 25 iteration budget.
+
+2. **Synthesis-tier model hallucinated non-executable tool calls**: When finally routed to `summarizer` (Gemini Flash), the model emitted fake Python-syntax code blocks — `print(search_hacker_news("..."))` — with completely hallucinated "output" JSON beneath them. These are *not* real tool calls: `_extract_markdown_tool_calls()` only handles JSON blocks, not Python code syntax. No real tools ran. `findings["summarizer"]` = raw fake-code, which the judge correctly scored Clarity: 1.
+
+3. **Iteration budget exhausted**: With 25/25 iterations consumed by the loop, `task_completion = 0.0` (neither `supervisor_decision == "END"` nor a `writer` finding existed). The preserved `report.md` in this directory is the raw hallucinated summarizer output — intentionally kept as a failure artifact.
+
+**The root mechanism**: Custom role naming (`migration_planner`, `django_assessor`, `rust_architect`) broke the shared vocabulary between the supervisor LLM and the routing layer. With standard role names, the Llama supervisor has reliable, trained priors for "this agent is done → advance." With improvised keys, those priors break down, producing loop-lock. This is likely a general failure mode of routing through dynamically-named agents with a weaker strategic model.
+
+**The preserved `report.md` in this directory** is the raw hallucinated summarizer output — kept as a concrete failure artifact, not a broken file.
 
 ## Research Implications
 
@@ -111,10 +123,25 @@ examples/
 ## Next Steps
 
 Based on these findings, future work will:
-1. **Expand evaluation dataset** (n=5 → n=20+) to investigate edge cases
-2. **Analyze failure modes** - why did the experimental architecture regress?
-3. **Hybrid architecture** - selective autonomy in specific workflow stages
-4. **Cost optimization** - reduce baseline costs while maintaining quality
+1. **Expand evaluation dataset** (n=5 → n=20+) to investigate edge cases, particularly questions requiring multi-step reasoning where custom roles may behave differently
+2. **Hybrid architecture** - selective autonomy in specific workflow stages (e.g., allow custom role naming only for the researcher tier where the supervisor vocabulary problem is less severe)
+3. **Cost optimization** - reduce baseline costs while maintaining quality through smarter context pruning
+4. **Investigate the routing lock-in failure mode** more rigorously: does it appear with stronger strategic models (Claude Sonnet), or is it specific to Llama 70B?
+
+## Limitations & Current Evaluation Gaps
+
+*These are known gaps, tracked for future improvement:*
+
+### LLM-as-Judge Grounding
+The current `ReportJudge` (`src/flexi/evals/judges.py`) evaluates reports against a 4-criterion rubric (clarity, citation, reasoning, hallucination) using a single LLM call with no external grounding. This means:
+- **Citation scores are self-reported**: the judge cannot verify whether cited sources actually say what the report claims
+- **Hallucination detection is model-dependent**: the judge uses the same class of model that generated the report
+
+**Planned upgrade** (not yet implemented): An **LLM-as-judge with search tool access** — the judge would actively retrieve the cited URLs and verify factual claims against the actual content before scoring. This would anchor citation and hallucination scores to external evidence rather than model priors, and is a stronger eval design for any production deployment of a research agent.
+
+### Metric Coverage
+- `calculate_tool_efficiency` is currently a heuristic based on iteration count, not actual tool diversity. An agent that needed 4 high-quality, non-redundant searches would be penalized equally to one stuck in a redundant loop.
+- No inter-rater reliability measurement for the judge (i.e., score variance across judge re-runs on the same report is not tracked).
 
 ## File Format Reference
 
